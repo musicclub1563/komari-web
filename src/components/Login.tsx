@@ -68,7 +68,8 @@ const LoginDialog = ({ trigger, autoOpen = false, showSettings = true, info, onL
         });
         const data = await res.json();
         if (res.status === 200) {
-          refresh();
+          // 等 /api/me 返回新身份后再继续：身份变化会触发 RPC 连接重建与节点刷新。
+          await refresh();
           if (typeof onLoginSuccess === "function") {
             onLoginSuccess();
             return

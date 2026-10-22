@@ -1,5 +1,6 @@
 import React from "react";
 import { useRPC2Call } from "./RPC2Context";
+import { subscribeAuthIdentitySettled } from "@/lib/authSession";
 
 export type NodeBasicInfo = {
   /** 节点唯一标识符 */
@@ -171,6 +172,16 @@ export const NodeListProvider: React.FC<{ children: React.ReactNode }> = ({
   React.useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // 登录/退出登录后游客与管理员可见的节点集合不同（隐藏节点只在登录后返回），
+  // 身份切换落地（RPC 连接已重建）后重新拉取节点列表。
+  React.useEffect(
+    () =>
+      subscribeAuthIdentitySettled(() => {
+        refresh();
+      }),
+    [refresh],
+  );
 
   const contextValue = React.useMemo(
     () => ({ nodeList, isLoading, error, refresh }),

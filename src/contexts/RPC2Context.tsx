@@ -9,6 +9,10 @@ import React, {
 import { RPC2Client } from "../lib/rpc2";
 import type { RPC2ConnectionStateType } from "../types/rpc2";
 import i18n from "../i18n/config";
+import {
+  notifyAuthIdentitySettled,
+  subscribeAuthIdentity,
+} from "../lib/authSession";
 
 interface RPC2ContextType {
   client: RPC2Client;
@@ -17,6 +21,8 @@ interface RPC2ContextType {
   error: string | null;
   connect: () => Promise<void>;
   disconnect: () => void;
+  /** 用最新 Cookie 重新建立连接（登录/退出登录后自动触发，也可手动调用）。 */
+  reconnect: () => Promise<void>;
 }
 
 const RPC2Context = createContext<RPC2ContextType | undefined>(undefined);
@@ -77,6 +83,26 @@ export const RPC2Provider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [client]);
 
+  // 身份变化后必须用最新 Cookie 重建连接：
+  // Komari 服务端在握手时保存连接身份，仅更新 Cookie 不会改变旧连接的身份。
+  // 连接重建结束后再通知依赖身份的数据刷新，避免它们仍然走旧连接。
+  useEffect(() => {
+    return subscribeAuthIdentity(() => {
+      setConnectionState(client.state);
+      client
+        .reconnect()
+        .catch((err) => {
+          setError(
+            err instanceof Error ? err.message : i18n.t("rpc2.connection_failed"),
+          );
+        })
+        .finally(() => {
+          setConnectionState(client.state);
+          notifyAuthIdentitySettled();
+        });
+    });
+  }, [client]);
+
   const connect = useCallback(async () => {
     try {
       setError(null);
@@ -91,6 +117,18 @@ export const RPC2Provider: React.FC<{ children: React.ReactNode }> = ({ children
     client.disconnect();
   }, [client]);
 
+  const reconnect = useCallback(async () => {
+    try {
+      setError(null);
+      await client.reconnect();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : i18n.t("rpc2.connection_failed"));
+      throw err;
+    } finally {
+      setConnectionState(client.state);
+    }
+  }, [client]);
+
   const isConnected = connectionState === "connected";
   const contextValue = useMemo(
     () => ({
@@ -100,8 +138,9 @@ export const RPC2Provider: React.FC<{ children: React.ReactNode }> = ({ children
       error,
       connect,
       disconnect,
+      reconnect,
     }),
-    [client, connectionState, isConnected, error, connect, disconnect],
+    [client, connectionState, isConnected, error, connect, disconnect, reconnect],
   );
 
   return (

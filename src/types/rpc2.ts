@@ -129,6 +129,13 @@ export interface RPC2CallOptions {
   timeout?: number;
   /** 是否为通知请求（不期望响应） */
   notification?: boolean;
+  /**
+   * 是否允许在“请求已发送但结果未知”时回退到 HTTP 重试。
+   *
+   * 默认值由方法名推断：只读方法（get/list/query/...）为 true，写操作为 false。
+   * 写操作请勿开启，除非该操作本身是幂等的。
+   */
+  safeToRetry?: boolean;
 }
 
 /**

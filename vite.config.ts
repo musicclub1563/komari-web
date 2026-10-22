@@ -54,6 +54,9 @@ export default defineConfig(({ mode }) => {
 
   // Supports configuring BASE_URL via environment variables, defaulting to the root path.
   const base: string = process.env.VITE_BASE_URL ? process.env.VITE_BASE_URL : '/';
+  // Normalize so the manifest/icon URLs work both at "/" and at a sub path such as "/komari/".
+  const normalizedBase = base.endsWith("/") ? base : `${base}/`;
+  const pwaIconUrl = `${normalizedBase}assets/pwa-icon.webp`;
   const baseConfig: UserConfig = {
     base: base,
     plugins: [
@@ -74,20 +77,25 @@ export default defineConfig(({ mode }) => {
           theme_color: "#2563eb",
           background_color: "#ffffff",
           display: "standalone",
-          scope: base,
-          start_url: base,
+          lang: "zh-CN",
+          orientation: "portrait-primary",
+          categories: ["utilities", "productivity"],
+          scope: normalizedBase,
+          start_url: normalizedBase,
+          // public/assets/pwa-icon.webp is a single 512x512 image; declaring other
+          // sizes for it would be inaccurate. A real 192x192 asset can be added later.
           icons: [
             {
-              src: "${base}assets/pwa-icon.webp",
-              sizes: "192x192",
-              type: "image/webp",
-              purpose: "maskable any",
-            },
-            {
-              src: "${base}assets/pwa-icon.webp",
+              src: pwaIconUrl,
               sizes: "512x512",
               type: "image/webp",
-              purpose: "maskable any",
+              purpose: "any",
+            },
+            {
+              src: pwaIconUrl,
+              sizes: "512x512",
+              type: "image/webp",
+              purpose: "maskable",
             },
           ],
         },
