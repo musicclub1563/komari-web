@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" onload="window.__pwned = 'svg-onload'">
+  <script>window.__pwned = 'svg-script';</script>
+  <a href="javascript:window.__pwned='svg-href'"><circle cx="12" cy="12" r="9" fill="#ef4444" /></a>
+</svg>

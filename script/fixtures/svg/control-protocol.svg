@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+  <!-- 变形协议：实体编码 + 控制字符；只写本地标记，不发起网络请求 -->
+  <a href="&#106;avascript:window.__pwned='entity-encoded'"><rect width="12" height="24" fill="#0ea5e9" /></a>
+  <a href="java&#9;script:window.__pwned='tab-encoded'"><rect x="12" width="12" height="24" fill="#0284c7" /></a>
+  <a href="java&#10;script:window.__pwned='newline-encoded'"><rect x="4" y="4" width="16" height="16" fill="#38bdf8" /></a>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+  <foreignObject width="24" height="24">
+    <div xmlns="http://www.w3.org/1999/xhtml">
+      <img src="x" onerror="window.__pwned = 'foreignObject-onerror'" />
+      <script>window.__pwned = 'foreignObject-script';</script>
+    </div>
+  </foreignObject>
+  <circle cx="12" cy="12" r="10" fill="#a855f7" />
+</svg>

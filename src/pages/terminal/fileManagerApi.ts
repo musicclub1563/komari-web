@@ -521,11 +521,21 @@ const officePreviewSourceOrigin = () => {
   return browserOrigin;
 };
 
-export const fetchOfficePreviewUrl = async (uuid: string, path: string) => {
+/**
+ * 申请 Office 在线预览地址。
+ *
+ * 注意：返回的 URL 会把带临时下载令牌的地址交给 view.officeapps.live.com，
+ * 只能由用户显式确认（“使用微软在线预览”）后调用，不得在打开文件时自动触发。
+ */
+export const fetchOfficePreviewUrl = async (
+  uuid: string,
+  path: string,
+  signal?: AbortSignal,
+) => {
   const tokenParams = new URLSearchParams({ path });
   const tokenResponse = await fetch(
     `/api/admin/client/${encodeURIComponent(uuid)}/file/preview-token?${tokenParams.toString()}`,
-    { credentials: "include" },
+    { credentials: "include", signal },
   );
   const tokenPayload = await tokenResponse.json().catch(() => null) as
     | { message?: string; data?: { token?: string } }

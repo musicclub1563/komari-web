@@ -76,7 +76,6 @@ import {
   copyTextToClipboard,
   fileDownloadUrl,
   formatClipboardPath,
-  fetchOfficePreviewUrl,
   formatFileSize,
   languageFromPath,
   maxPreviewSizeForFile,
@@ -89,6 +88,7 @@ import {
   type RemoteFileInfo,
   type RemoteTextEncoding,
 } from "./fileManagerApi";
+import OfficeFilePreviewPanel from "./OfficeFilePreviewPanel";
 import { monaco } from "./monacoSetup";
 
 type DocumentKind = FilePreviewKind | "too-large" | "error";
@@ -364,8 +364,7 @@ const FileEditorDialog = ({
   const [positionLine, setPositionLine] = useState("1");
   const [positionColumn, setPositionColumn] = useState("1");
   const quickOpenTokenRef = useRef(0);
-  const [officePreviewSrc, setOfficePreviewSrc] = useState<string | null>(null);
-  const [officePreviewError, setOfficePreviewError] = useState<string | null>(null);
+
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [explorerWidth, setExplorerWidth] = useState(230);
   const [outlineWidth, setOutlineWidth] = useState(220);
@@ -1379,29 +1378,6 @@ const FileEditorDialog = ({
     );
   };
 
-  useEffect(() => {
-    if (!open || activeDocument?.kind !== "office") {
-      setOfficePreviewSrc(null);
-      setOfficePreviewError(null);
-      return;
-    }
-    let cancelled = false;
-    setOfficePreviewSrc(null);
-    setOfficePreviewError(null);
-    void fetchOfficePreviewUrl(uuid, activeDocument.path)
-      .then((url) => {
-        if (!cancelled) setOfficePreviewSrc(url);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setOfficePreviewSrc(null);
-          setOfficePreviewError(error instanceof Error ? error.message : "Failed to create Office preview");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeDocument?.kind, activeDocument?.path, open, uuid]);
 
   if (!open) {
     return null;
@@ -1793,27 +1769,11 @@ const FileEditorDialog = ({
                   <iframe key={activeDocument.path} title={activeDocument.name} src={mediaUrl} className="h-full w-full border-0 bg-white" />
                 )}
                 {activeDocument?.kind === "office" && (
-                  officePreviewError ? (
-                    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#1e1e1e] text-xs text-[#a7a7a7]">
-                      <Braces size={36} strokeWidth={1.25} />
-                      <span>{t("file_manager.editor.preview_failed", "Unable to preview this file")}</span>
-                      <a href={fileDownloadUrl(uuid, activeDocument.path)} className="text-xs text-[#75beff] hover:underline">
-                        {t("file_manager.download", "Download")}
-                      </a>
-                    </div>
-                  ) : officePreviewSrc ? (
-                    <iframe
-                      key={activeDocument.path}
-                      title={activeDocument.name}
-                      src={officePreviewSrc}
-                      className="h-full w-full border-0 bg-white"
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center bg-[#1e1e1e] text-xs text-[#bbbbbb]">
-                      <RotateCcw size={16} className="mr-2 animate-spin" />
-                      {t("file_manager.loading", "Loading...")}
-                    </div>
-                  )
+                  <OfficeFilePreviewPanel
+                    key={activeDocument.path}
+                    uuid={uuid}
+                    path={activeDocument.path}
+                  />
                 )}
                 {activeDocument?.kind === "too-large" && (
                   <div className="flex h-full flex-col items-center justify-center gap-3 text-[#a7a7a7]">
