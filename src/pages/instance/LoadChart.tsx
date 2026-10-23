@@ -52,6 +52,7 @@ import { Button } from "@/components/ui/button";
 import Loading from "@/components/loading";
 import MetricBoundaryAxisTick from "@/components/MetricBoundaryAxisTick";
 import PingMetricStatContent from "@/components/PingMetricStatContent";
+import SafeHtml from "@/components/SafeHtml";
 import Tips from "@/components/ui/tips";
 import { useAccount } from "@/contexts/AccountContext";
 import { useNodeList } from "@/contexts/NodeListContext";
@@ -1445,11 +1446,9 @@ const LoadChart = ({ data = [], onRealtimeActiveChange }: LoadChartProps) => {
               <div className="flex items-center gap-1">
                 <span>{t("chart.samplingAlgorithm", "Sampling algorithm")}</span>
                 <Tips mode="popup" side="top">
-                  <span
+                  <SafeHtml
                     className="block max-w-72"
-                    dangerouslySetInnerHTML={{
-                      __html: t("chart.samplingAlgorithmTips"),
-                    }}
+                    html={t("chart.samplingAlgorithmTips")}
                   />
                 </Tips>
               </div>
@@ -1468,7 +1467,7 @@ const LoadChart = ({ data = [], onRealtimeActiveChange }: LoadChartProps) => {
               <Switch checked={ewmaEnabled} onCheckedChange={setEwmaEnabled} />
               <span>EWMA</span>
               <Tips mode="popup" side="top">
-                <span dangerouslySetInnerHTML={{ __html: t("chart.cutPeak_tips") }} />
+                <SafeHtml html={t("chart.cutPeak_tips")} />
               </Tips>
             </label>
           </div>

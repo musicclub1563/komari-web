@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import Loading from "@/components/loading";
 import MetricBoundaryAxisTick from "@/components/MetricBoundaryAxisTick";
 import PingMetricStatContent from "@/components/PingMetricStatContent";
+import SafeHtml from "@/components/SafeHtml";
 import {
   ChartContainer,
   ChartTooltip,
@@ -367,9 +368,7 @@ const MiniPingChart = ({
             />
             <span className="text-sm font-medium">EWMA</span>
             <Tips mode="auto" side="top">
-              <span
-                dangerouslySetInnerHTML={{ __html: t("chart.cutPeak_tips") }}
-              />
+              <SafeHtml html={t("chart.cutPeak_tips")} />
             </Tips>
           </div>
         </>

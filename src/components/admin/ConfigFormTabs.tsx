@@ -16,6 +16,7 @@ import {
   SettingCardSwitch,
 } from "@/components/admin/SettingCard";
 import SelectorDialog from "@/components/SelectorDialog";
+import SafeHtml from "@/components/SafeHtml";
 import { useNodeList } from "@/contexts/NodeListContext";
 import { useRPC2Call } from "@/contexts/RPC2Context";
 import type { I18nText } from "@/utils/i18nText";
@@ -336,11 +337,15 @@ const ConfigFormTabs = ({
     const title = resolveText(item.name);
     const description = resolveText(item.help);
     if (item.type === "textbox") {
+      // 说明块允许少量排版 HTML，但使用比页脚更窄的白名单：
+      // 不含图片、内联样式、分块容器，事件属性与危险协议一律丢弃。
       return (
-        <Box
+        <SafeHtml
           key={`textbox-${index}`}
+          as="div"
           className="km-config-textbox"
-          dangerouslySetInnerHTML={{ __html: title || "" }}
+          profile="config"
+          html={title || ""}
         />
       );
     }

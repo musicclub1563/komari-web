@@ -1,5 +1,6 @@
 import { Flex, Text } from "@radix-ui/themes";
 import { useEffect, useState } from "react";
+import SafeHtml from "@/components/SafeHtml";
 import { useRPC2Call } from "@/contexts/RPC2Context";
 import { usePublicInfo } from "@/contexts/PublicInfoContext";
 
@@ -55,11 +56,7 @@ const Footer = () => {
           color="gray"
           className="flex flex-col justify-center items-center"
         >
-          <span
-            dangerouslySetInnerHTML={{
-              __html: customFooterHtml,
-            }}
-          ></span>
+          <SafeHtml html={customFooterHtml} profile="footer" />
           <Text size="2" color="gray">
             Powered by Komari Monitor.
           </Text>

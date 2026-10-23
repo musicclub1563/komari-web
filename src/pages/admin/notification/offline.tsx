@@ -1,3 +1,4 @@
+import SafeHtml from "@/components/SafeHtml";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
@@ -244,9 +245,7 @@ const InnerLayout = () => {
         </Dialog.Root>
       </Flex>
       <label className="km-notification-offline-preview text-sm text-muted-foreground">
-        <span
-          dangerouslySetInnerHTML={{ __html: t("notification.offline.tips") }}
-        />
+        <SafeHtml html={t("notification.offline.tips")} />
       </label>
     </div>
   );

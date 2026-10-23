@@ -13,6 +13,7 @@
     "test:browser:svg": "node script/svg-icon.browser.mjs",
     "test:browser:office": "node script/office-preview.browser.mjs",
     "test:browser:pwa": "node script/pwa-cache.browser.mjs",
+    "test:browser:html": "node script/html-safety.browser.mjs",
     "preview": "vite preview",
     "i18n:sync": "node ./script/i18n-sync.mjs",
     "i18n:sync:dry": "node ./script/i18n-sync.mjs --dry-run"
@@ -42,6 +43,7 @@
     "clsx": "^2.1.1",
     "dotenv": "^16.5.0",
     "github-markdown-css": "^5.8.1",
+    "dompurify": "^3.4.17",
     "http-proxy-middleware": "^3.0.7",
     "i18next": "^25.1.2",
     "i18next-browser-languagedetector": "^8.1.0",
@@ -86,7 +88,7 @@
     "vite-plugin-pwa": "^1.1.0"
   },
   "overrides": {
-    "dompurify": "3.4.17"
+    "dompurify": "$dompurify"
   },
   "engines": {
     "node": ">=22.12.0"

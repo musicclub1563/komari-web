@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import SafeHtml from "@/components/SafeHtml";
 import {
   DndContext,
   closestCenter,
@@ -2452,9 +2453,7 @@ function EditButton({ node }: { node: NodeDetail }) {
                 {t("common.tagsDescription")}
               </label>
               <Tips>
-                <span
-                  dangerouslySetInnerHTML={{ __html: t("common.tagsTips") }}
-                />
+                <SafeHtml html={t("common.tagsTips")} />
               </Tips>
             </label>
             <TextField.Root defaultValue={node.tags} ref={tagsRef} />
@@ -2912,7 +2911,7 @@ function BillingButton({ node }: { node: NodeDetail }) {
             />
 
             <label className="font-bold flex items-center gap-1">
-              {t("admin.nodeTable.billingCycle")} <Tips><span dangerouslySetInnerHTML={{ __html: t("admin.nodeTable.billingCycleTips") }}></span></Tips>
+              {t("admin.nodeTable.billingCycle")} <Tips><SafeHtml html={t("admin.nodeTable.billingCycleTips")} /></Tips>
             </label>
             <SelectOrInput
             options={[
