@@ -12,6 +12,7 @@
     "test:browser": "node script/onboarding.browser.mjs",
     "test:browser:svg": "node script/svg-icon.browser.mjs",
     "test:browser:office": "node script/office-preview.browser.mjs",
+    "test:browser:pwa": "node script/pwa-cache.browser.mjs",
     "preview": "vite preview",
     "i18n:sync": "node ./script/i18n-sync.mjs",
     "i18n:sync:dry": "node ./script/i18n-sync.mjs --dry-run"

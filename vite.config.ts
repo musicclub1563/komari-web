@@ -105,20 +105,22 @@ export default defineConfig(({ mode }) => {
           globPatterns: ["**/*.{js,css,ico,png,svg}"],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           navigateFallback: null,
+          // Drop outdated precaches of previous Workbox versions when the worker activates.
+          cleanupOutdatedCaches: true,
+          // Purge the legacy runtime cache ("api-cache") that earlier releases used to
+          // store backend API responses, including the login-state /api/me endpoint.
+          // Only caches created by this application are removed.
+          importScripts: [`${normalizedBase}sw-cache-cleanup.js`],
           runtimeCaching: [
             {
-              urlPattern: /^https:\/\/api\./i,
-              handler: "NetworkFirst",
-              options: {
-                cacheName: "api-cache",
-                expiration: {
-                  maxEntries: 10,
-                  maxAgeSeconds: 60 * 60 * 24 * 365, // <== 365 days
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
+              // Same-origin backend API (login state, admin APIs, file access) must never
+              // be cached and must never be answered from a cache when the network fails:
+              // only the network (or a hard failure) is allowed. Older releases used a
+              // NetworkFirst rule for /^https:\/\/api\./i, which stored /api/me responses
+              // in a shared "api-cache" and replayed them after logout.
+              urlPattern: ({ url, sameOrigin }: { url: URL; sameOrigin: boolean }) =>
+                sameOrigin && url.pathname.startsWith("/api/"),
+              handler: "NetworkOnly",
             },
           ],
         },
