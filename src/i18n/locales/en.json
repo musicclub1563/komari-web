@@ -1,4 +1,18 @@
 {
+  "adminNavigation": {
+    "operations": "Monitoring & operations",
+    "system": "System settings",
+    "security": "Account & security",
+    "site": "Site settings",
+    "general": "General settings",
+    "login": "Authentication",
+    "profile": "Profile",
+    "sessions": "Login sessions",
+    "pluginSettings": "Plugin settings",
+    "events": "Event notifications",
+    "pluginFeatures": "Plugin features",
+    "extensions": "Appearance & plugins"
+  },
   "notificationUpgrade": {
     "title": "Notification Channels Have Changed",
     "description": "You upgraded from a version earlier than 1.6.0. Notification channels have undergone breaking changes. Please reconfigure and test your notification channels to ensure alerts are delivered.",
@@ -73,6 +87,9 @@
     }
   },
   "about": {
+    "dependency_scope": "Direct dependencies declared in project manifests; Web includes development dependencies and excludes its self-reference. Transitive dependencies are not included in these counts.",
+    "development_dependency": "Development dependency (manifest classification)",
+    "twemoji_notice": "Code: MIT; graphics: CC-BY-4.0; graphics unmodified",
     "ai": "The development process of the Komari project has been assisted by artificial intelligence tools. These tools are used for tasks such as code generation, refactoring, and debugging to improve development efficiency and code quality. All AI-generated code and suggestions have been reviewed and validated by human developers.",
     "open_source": "Komari is open source under the MIT license and is built using the following open source software:",
     "open_source_title": "Open Source Software License",
@@ -874,6 +891,16 @@
     "market_plugins": "plugins",
     "market_refresh_success": "Plugin sources refreshed",
     "market_reinstall": "Reinstall",
+    "market_category": "Plugin category",
+    "categories": {
+      "notification": "Notifications",
+      "monitoring": "Monitoring and alerts",
+      "network": "Network and domains",
+      "security": "Login and security",
+      "integration": "Data and integrations",
+      "utility": "System and utilities",
+      "uncategorized": "Uncategorized"
+    },
     "market_search": "Search plugins...",
     "market_update_required": "Komari update required",
     "market_uninstall_success": "Plugin uninstalled",

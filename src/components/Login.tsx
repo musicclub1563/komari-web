@@ -1,3 +1,4 @@
+import Loading from "@/components/loading";
 import * as React from "react";
 import {
   Dialog,
@@ -91,7 +92,7 @@ const LoginDialog = ({ trigger, autoOpen = false, showSettings = true, info, onL
     };
 
     if (loading) {
-      return <Button disabled>{t("loading")}</Button>;
+      return <Loading compact />;
     }
     if (error || !account) {
       return (

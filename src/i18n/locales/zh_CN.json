@@ -1,9 +1,12 @@
 {
   "about": {
     "ai": "Komari 项目的开发过程得到了人工智能工具的辅助。这些工具被用于执行代码生成、重构和调试等任务，以提高开发效率和代码质量。所有由 AI 生成的代码和建议都经过了人类开发者的审查与验证。",
+    "dependency_scope": "统计各项目清单中声明的直接依赖；Web 包含开发依赖，不包含本项目的自引用。间接依赖不计入此清单，未声明不代表未被间接使用。",
+    "development_dependency": "开发依赖（按清单分类）",
     "open_source": "Komari 基于 MIT 协议开源，并使用了以下开源软件构建：",
     "open_source_title": "开源软件许可协议",
-    "readme_open_in_new_tab": "在新标签页中打开"
+    "readme_open_in_new_tab": "在新标签页中打开",
+    "twemoji_notice": "代码采用 MIT，图像采用 CC-BY-4.0；图像未修改"
   },
   "account": {
     "2fa_disabled": "双重身份验证已禁用",
@@ -162,6 +165,20 @@
       "traffic": "流量用量",
       "traffic_description": "Komari将会在服务器到达指定的流量使用百分比时发送通知，并以5%为梯度持续提醒。如果服务器没有设置流量阈值，不发送通知。设置为0禁用流量提醒。"
     }
+  },
+  "adminNavigation": {
+    "events": "事件通知",
+    "extensions": "外观与插件",
+    "general": "通用设置",
+    "login": "登录认证",
+    "operations": "监控与运维",
+    "pluginFeatures": "插件功能",
+    "pluginSettings": "插件设置",
+    "profile": "个人账户",
+    "security": "账号与安全",
+    "sessions": "登录会话",
+    "site": "站点设置",
+    "system": "系统设置"
   },
   "chart": {
     "addChart": "新增图表",
@@ -819,7 +836,7 @@
     "markets": {
       "action": "浏览插件",
       "description": "在主题市场浏览主题，为监控页面更换外观。安装后可在「主题」菜单中管理。",
-      "plugins_description": "插件市场提供更多扩展功能。安装后，可从「插件」菜单管理和配置插件。",
+      "plugins_description": "插件市场提供更多插件功能。安装后，可从「插件」菜单管理和配置插件。",
       "plugins_title": "用插件扩展 Komari",
       "title": "逛逛主题市场"
     },
@@ -870,6 +887,15 @@
     "title": "延迟监测"
   },
   "plugin": {
+    "categories": {
+      "integration": "数据与集成",
+      "monitoring": "监控与告警",
+      "network": "网络与域名",
+      "notification": "通知渠道",
+      "security": "登录与安全",
+      "uncategorized": "未分类",
+      "utility": "系统与工具"
+    },
     "config": "配置",
     "config_no_configurable_plugins": "没有带配置项的插件",
     "config_no_items": "该插件没有配置项",
@@ -895,6 +921,7 @@
     "logs_load_failed": "加载日志失败",
     "manage": "插件管理",
     "market": "插件市场",
+    "market_category": "插件分类",
     "market_install": "安装",
     "market_install_success": "插件已安装",
     "market_installing": "安装中...",
