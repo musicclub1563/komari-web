@@ -43,11 +43,13 @@ import {
   X,
 } from "lucide-react";
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { ReactNode } from "react";
@@ -56,9 +58,15 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useRemoteFileService } from "./useRemoteFileService";
-import { DEFAULT_TERMINAL_FONT_FAMILY } from "./terminalDefaults";
+import {
+  DEFAULT_TERMINAL_FONT_FAMILY,
+  fetchTerminalSettingsFromTheme,
+  getCachedTerminalSettings,
+  type TerminalSettings,
+} from "./terminalDefaults";
 import EditorResourceMonitor from "./EditorResourceMonitor";
 import EditorTerminalPanel from "./EditorTerminalPanel";
+import TerminalBackgroundMedia from "./TerminalBackgroundMedia";
 import TerminalDialog from "./TerminalDialog";
 import {
   FileContextMenu,
@@ -79,6 +87,7 @@ import {
   formatClipboardPath,
   formatFileSize,
   languageFromPath,
+  MAX_EDITABLE_FILE_SIZE,
   maxPreviewSizeForFile,
   previewKindForFile,
   remoteDirname,
@@ -119,10 +128,13 @@ interface OutlineItem {
 interface FileEditorDialogProps {
   open: boolean;
   uuid: string;
+  serverName?: string;
+  serverOs?: string;
   initialFile: RemoteFileInfo | null;
   initialLine?: number;
   refreshToken?: number;
   fontFamily?: string;
+  terminalSettings?: TerminalSettings;
   onOpenChange: (open: boolean) => void;
   onSaved?: () => void;
   onChanged?: () => void;
@@ -180,9 +192,25 @@ const supportedLanguages = [
   "xml",
 ];
 
+type StatusMenuKind = "spaces" | "language" | "encoding" | "openWith";
+
+const OPEN_WITH_MODES: Array<{
+  kind: FilePreviewKind;
+  i18nKey: string;
+  fallback: string;
+}> = [
+  { kind: "text", i18nKey: "file_manager.editor.open_with_modes.text", fallback: "Text" },
+  { kind: "image", i18nKey: "file_manager.editor.open_with_modes.image", fallback: "Image" },
+  { kind: "audio", i18nKey: "file_manager.editor.open_with_modes.audio", fallback: "Audio" },
+  { kind: "video", i18nKey: "file_manager.editor.open_with_modes.video", fallback: "Video" },
+  { kind: "pdf", i18nKey: "file_manager.editor.open_with_modes.pdf", fallback: "PDF" },
+  { kind: "office", i18nKey: "file_manager.editor.open_with_modes.office", fallback: "Office" },
+];
+
 interface EditorTabItemProps {
   document: EditorDocument;
   active: boolean;
+  hasBackground?: boolean;
   onActivate: (path: string) => void;
   onRequestClose: (path: string) => void;
   onContextMenu: (event: ReactMouseEvent<HTMLDivElement>, path: string) => void;
@@ -191,6 +219,7 @@ interface EditorTabItemProps {
 const EditorTabItem = ({
   document,
   active,
+  hasBackground = false,
   onActivate,
   onRequestClose,
   onContextMenu,
@@ -219,10 +248,16 @@ const EditorTabItem = ({
     <div
       ref={setNodeRef}
       style={style}
-      className={`group flex h-9 min-w-[120px] max-w-[240px] shrink-0 cursor-pointer items-center gap-2 border-r border-[#2b2b2b] px-3 text-xs ${
+      className={`group flex h-9 min-w-[120px] max-w-[240px] shrink-0 cursor-pointer items-center gap-2 px-3 text-xs ${
+        hasBackground ? "border-r border-white/[0.08]" : "border-r border-[#2b2b2b]"
+      } ${
         active
-          ? "border-t border-t-[#55a7e0] bg-[#1e1e1e] text-white"
-          : "bg-[#181818] text-[#969696] hover:bg-[#202020]"
+          ? hasBackground
+            ? "border-t border-t-[#55a7e0] bg-white/[0.12] text-white"
+            : "border-t border-t-[#55a7e0] bg-[#1e1e1e] text-white"
+          : hasBackground
+            ? "bg-transparent text-[#c8c8c8] hover:bg-white/[0.08]"
+            : "bg-[#181818] text-[#969696] hover:bg-[#202020]"
       }`}
       {...attributes}
       {...listeners}
@@ -328,19 +363,95 @@ const buildOutlineTree = (items: OutlineItem[]): OutlineNode[] => {
   return roots;
 };
 
+interface CursorPosition {
+  line: number;
+  column: number;
+}
+
+interface CursorStore {
+  getSnapshot: () => CursorPosition;
+  set: (line: number, column: number) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+function createCursorStore(): CursorStore {
+  let current: CursorPosition = { line: 1, column: 1 };
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => current,
+    set: (line: number, column: number) => {
+      if (current.line === line && current.column === column) return;
+      current = { line, column };
+      listeners.forEach((listener) => listener());
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
+// 仅状态栏行/列指示器订阅光标位置，避免每次键入或移动光标重渲染整个 2300 行编辑器弹窗
+const EditorCursorStatus = memo(function EditorCursorStatus({
+  store,
+  onClick,
+  title,
+}: {
+  store: CursorStore;
+  onClick: () => void;
+  title: string;
+}) {
+  const cursor = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  return (
+    <button
+      type="button"
+      className="mr-2 h-6 shrink-0 whitespace-nowrap border-0 bg-transparent px-1 text-[11px] text-white hover:bg-black/25"
+      onClick={onClick}
+      title={title}
+    >
+      Ln {cursor.line}, Col {cursor.column}
+    </button>
+  );
+});
+
 const FileEditorDialog = ({
   open,
   uuid,
+  serverName,
+  serverOs,
   initialFile,
   initialLine = 1,
   refreshToken = 0,
-  fontFamily = DEFAULT_TERMINAL_FONT_FAMILY,
+  fontFamily: fontFamilyProp,
+  terminalSettings: terminalSettingsProp,
   onOpenChange,
   onSaved,
   onChanged,
 }: FileEditorDialogProps) => {
   const { t } = useTranslation();
   const fileService = useRemoteFileService(uuid);
+  const [loadedTerminalSettings, setLoadedTerminalSettings] = useState<TerminalSettings>(
+    () => terminalSettingsProp ?? getCachedTerminalSettings(),
+  );
+  useEffect(() => {
+    if (!open || terminalSettingsProp) return;
+    let mounted = true;
+    void fetchTerminalSettingsFromTheme()
+      .then((loaded) => {
+        if (mounted) setLoadedTerminalSettings(loaded);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [open, terminalSettingsProp]);
+  const resolvedSettings = terminalSettingsProp ?? loadedTerminalSettings;
+  const fontFamily =
+    fontFamilyProp ?? resolvedSettings.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY;
+  const backgroundUrl = resolvedSettings.backgroundUrl.trim();
+  const hasBackground = Boolean(backgroundUrl);
   const { uploadBlob: uploadEditorBlob } = useRemoteFileUpload(uuid, () => undefined, { silent: true });
   const [documents, setDocuments] = useState<EditorDocument[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -357,7 +468,7 @@ const FileEditorDialog = ({
   const [tabSize, setTabSize] = useState(2);
   const [tabContextPath, setTabContextPath] = useState<string | null>(null);
   const [textContextMenu, setTextContextMenu] = useState<ContextMenuPosition | null>(null);
-  const [statusMenuKind, setStatusMenuKind] = useState<"spaces" | "language" | "encoding" | null>(null);
+  const [statusMenuKind, setStatusMenuKind] = useState<StatusMenuKind | null>(null);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
   const [quickOpenSuggestions, setQuickOpenSuggestions] = useState<string[]>([]);
@@ -367,14 +478,25 @@ const FileEditorDialog = ({
   const quickOpenTokenRef = useRef(0);
 
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalMounted, setTerminalMounted] = useState(false);
+  useEffect(() => {
+    if (terminalOpen) {
+      setTerminalMounted(true);
+    }
+  }, [terminalOpen]);
+  useEffect(() => {
+    setTerminalOpen(false);
+    setTerminalMounted(false);
+  }, [uuid]);
   const [explorerWidth, setExplorerWidth] = useState(230);
   const [outlineWidth, setOutlineWidth] = useState(220);
-  const [cursor, setCursor] = useState({ line: 1, column: 1 });
+  const cursorStore = useMemo(() => createCursorStore(), []);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const programmaticEditorValueRef = useRef<string | null>(null);
   const documentsRef = useRef<EditorDocument[]>([]);
   const activePathRef = useRef<string | null>(null);
   const openingPathsRef = useRef<Set<string>>(new Set());
+  const openModeRequestTokenRef = useRef<Map<string, number>>(new Map());
   const savingPathsRef = useRef<Set<string>>(new Set());
   const openedInitialRef = useRef("");
   const openChangeRef = useRef(onOpenChange);
@@ -456,6 +578,74 @@ const FileEditorDialog = ({
     setOutlineCollapsed(new Set());
   }, [activePath]);
 
+  /**
+   * Load remote bytes for `path` and decode them into the document's text buffer.
+   * Guarded by a per-path monotonic token so switching viewer modes mid-flight drops stale reads.
+   */
+  const loadDocumentAsText = useCallback(
+    async (path: string, line = 1) => {
+      const token = (openModeRequestTokenRef.current.get(path) ?? 0) + 1;
+      openModeRequestTokenRef.current.set(path, token);
+      try {
+        const result = await fileService.read(path);
+        if (openModeRequestTokenRef.current.get(path) !== token) {
+          return;
+        }
+        const sourceBytes = result.bytes;
+        const encoding = detectRemoteTextEncoding(sourceBytes);
+        const content = decodeRemoteTextBytes(sourceBytes, encoding);
+        setDocuments((current) =>
+          current.map((item) =>
+            item.path === path
+              ? {
+                  ...item,
+                  content,
+                  savedContent: content,
+                  contentType: result.content_type,
+                  encoding,
+                  sourceBytes,
+                  kind: "text",
+                  language: item.sourceBytes ? item.language : languageFromPath(path),
+                  size: result.size,
+                  loading: false,
+                  errorMessage: undefined,
+                }
+              : item,
+          ),
+        );
+        if (activePathRef.current === path) {
+          window.setTimeout(() => {
+            editorRef.current?.revealLineInCenter(line);
+            editorRef.current?.setPosition({ lineNumber: line, column: 1 });
+          }, 60);
+        }
+      } catch (error) {
+        if (openModeRequestTokenRef.current.get(path) !== token) {
+          return;
+        }
+        const message =
+          error instanceof Error
+            ? error.message
+            : t("file_manager.load_failed", "Failed to load file");
+        const sizeLimitError = /exceeds.*limit|too large|too_big/i.test(message);
+        setDocuments((current) =>
+          current.map((item) =>
+            item.path === path
+              ? {
+                  ...item,
+                  kind: sizeLimitError ? "too-large" : "error",
+                  loading: false,
+                  errorMessage: message,
+                }
+              : item,
+          ),
+        );
+        toast.error(message);
+      }
+    },
+    [fileService, t],
+  );
+
   const openFile = useCallback(
     async (file: RemoteFileInfo, line = 1, depth = 0) => {
       if (file.is_dir) return;
@@ -534,49 +724,12 @@ const FileEditorDialog = ({
         setDocuments((current) => [...current, placeholder]);
         setActivePath(placeholder.path);
 
-        const result = await fileService.read(file.path);
-        const sourceBytes = result.bytes;
-        const encoding = detectRemoteTextEncoding(sourceBytes);
-        const content = decodeRemoteTextBytes(sourceBytes, encoding);
-        const document: EditorDocument = {
-          ...placeholder,
-          content,
-          savedContent: content,
-          contentType: result.content_type,
-          encoding,
-          sourceBytes,
-          kind: "text",
-          size: result.size,
-          loading: false,
-        };
-        setDocuments((current) =>
-          current.map((item) => (item.path === file.path ? document : item)),
-        );
-        window.setTimeout(() => {
-          editorRef.current?.revealLineInCenter(line);
-          editorRef.current?.setPosition({ lineNumber: line, column: 1 });
-        }, 60);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : t("file_manager.load_failed", "Failed to load file");
-        const sizeLimitError = /exceeds.*limit|too large|too_big/i.test(message);
-        setDocuments((current) =>
-          current.map((item) =>
-            item.path === file.path
-              ? {
-                  ...item,
-                  kind: sizeLimitError ? "too-large" : "error",
-                  loading: false,
-                  errorMessage: message,
-                }
-              : item,
-          ),
-        );
-        toast.error(message);
+        await loadDocumentAsText(file.path, line);
       } finally {
         openingPathsRef.current.delete(file.path);
       }
     },
-    [fileService, t],
+    [fileService, loadDocumentAsText, t],
   );
 
   useEffect(() => {
@@ -605,7 +758,10 @@ const FileEditorDialog = ({
   const saveDocument = useCallback(
     async (path: string, encodingOverride?: RemoteTextEncoding) => {
       const document = documentsRef.current.find((item) => item.path === path);
-      if (!document || document.kind !== "text") {
+      if (
+        !document ||
+        (document.kind !== "text" && document.content === document.savedContent)
+      ) {
         return true;
       }
       const targetEncoding = encodingOverride ?? document.encoding;
@@ -684,6 +840,9 @@ const FileEditorDialog = ({
 
   const closeDocumentsNow = useCallback((paths: string[]) => {
     const pathSet = new Set(paths);
+    for (const path of paths) {
+      openModeRequestTokenRef.current.delete(path);
+    }
     const current = documentsRef.current;
     const next = current.filter((document) => !pathSet.has(document.path));
     setDocuments(next);
@@ -792,6 +951,7 @@ const FileEditorDialog = ({
     setFullscreen(false);
     setTabContextPath(null);
     setTerminalOpen(false);
+    setTerminalMounted(false);
     closeContextMenu();
     window.setTimeout(() => disposeDocumentModels(paths), 0);
     openChangeRef.current(false);
@@ -997,7 +1157,7 @@ const FileEditorDialog = ({
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyS, () => saveAllRef.current());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Tab, () => switchDocumentRef.current(1));
     editor.onDidChangeCursorPosition((event) => {
-      setCursor({ line: event.position.lineNumber, column: event.position.column });
+      cursorStore.set(event.position.lineNumber, event.position.column);
     });
     editor.onDidChangeCursorSelection(updateEditorState);
     editor.onDidChangeModelContent(updateEditorState);
@@ -1013,7 +1173,7 @@ const FileEditorDialog = ({
     editor.onDidDispose(() => {
       editorDom?.removeEventListener("contextmenu", handleContextMenu);
     });
-  }, [updateEditorState]);
+  }, [cursorStore, updateEditorState]);
 
   const runEditorCommand = useCallback((commandId: string) => {
     const editor = editorRef.current;
@@ -1035,10 +1195,11 @@ const FileEditorDialog = ({
   }, [fileService, openFile, t]);
 
   const openPositionDialog = useCallback(() => {
-    setPositionLine(String(cursor.line));
-    setPositionColumn(String(cursor.column));
+    const current = cursorStore.getSnapshot();
+    setPositionLine(String(current.line));
+    setPositionColumn(String(current.column));
     setPositionOpen(true);
-  }, [cursor.column, cursor.line]);
+  }, [cursorStore]);
 
   const submitPosition = useCallback(() => {
     const editor = editorRef.current;
@@ -1052,9 +1213,9 @@ const FileEditorDialog = ({
     editor.setPosition({ lineNumber, column });
     editor.revealPositionInCenter({ lineNumber, column });
     editor.focus();
-    setCursor({ line: lineNumber, column });
+    cursorStore.set(lineNumber, column);
     setPositionOpen(false);
-  }, [positionColumn, positionLine]);
+  }, [cursorStore, positionColumn, positionLine]);
 
   const buildTextContextMenuItems = useCallback((): ContextMenuItemConfig[] => {
     const { hasSelection, canUndo, canRedo } = editorStateRef.current;
@@ -1104,7 +1265,7 @@ const FileEditorDialog = ({
     ];
   }, [runEditorCommand, t]);
 
-  const openStatusMenu = useCallback((kind: "spaces" | "language" | "encoding", event: ReactMouseEvent<HTMLButtonElement>) => {
+  const openStatusMenu = useCallback((kind: StatusMenuKind, event: ReactMouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     openContextMenu({
       clientX: rect.left,
@@ -1123,6 +1284,75 @@ const FileEditorDialog = ({
     const model = editorRef.current?.getModel();
     if (model) monaco.editor.setModelLanguage(model, language);
   }, []);
+
+  const openWithKind = useCallback(
+    async (targetKind: FilePreviewKind) => {
+      const path = activePathRef.current;
+      if (!path) return;
+      const doc = documentsRef.current.find((item) => item.path === path);
+      if (!doc || doc.kind === targetKind) return;
+
+      if (targetKind !== "text") {
+        openModeRequestTokenRef.current.set(
+          path,
+          (openModeRequestTokenRef.current.get(path) ?? 0) + 1,
+        );
+        setDocuments((current) =>
+          current.map((item) =>
+            item.path === path
+              ? { ...item, kind: targetKind, loading: false, errorMessage: undefined }
+              : item,
+          ),
+        );
+        return;
+      }
+
+      if (doc.sourceBytes !== undefined) {
+        openModeRequestTokenRef.current.set(
+          path,
+          (openModeRequestTokenRef.current.get(path) ?? 0) + 1,
+        );
+        setDocuments((current) =>
+          current.map((item) =>
+            item.path === path
+              ? { ...item, kind: "text", loading: false, errorMessage: undefined }
+              : item,
+          ),
+        );
+        return;
+      }
+
+      if (doc.size > MAX_EDITABLE_FILE_SIZE) {
+        setDocuments((current) =>
+          current.map((item) =>
+            item.path === path
+              ? { ...item, kind: "too-large", loading: false, errorMessage: undefined }
+              : item,
+          ),
+        );
+        toast.error(
+          t("file_manager.editor.too_large_preview", "File is too large to preview"),
+        );
+        return;
+      }
+
+      setDocuments((current) =>
+        current.map((item) =>
+          item.path === path
+            ? {
+                ...item,
+                kind: "text",
+                language: languageFromPath(item.path),
+                loading: true,
+                errorMessage: undefined,
+              }
+            : item,
+        ),
+      );
+      await loadDocumentAsText(path);
+    },
+    [loadDocumentAsText, t],
+  );
 
   const reopenDocumentWithEncoding = useCallback((path: string, encoding: RemoteTextEncoding) => {
     const document = documentsRef.current.find((item) => item.path === path);
@@ -1229,8 +1459,21 @@ const FileEditorDialog = ({
         },
       ];
     }
+    if (statusMenuKind === "openWith") {
+      return OPEN_WITH_MODES.map((mode) => ({
+        key: `open-with-${mode.kind}`,
+        label: t(mode.i18nKey, mode.fallback),
+        icon: activeDocument?.kind === mode.kind
+          ? <Check size={14} />
+          : <span className="inline-block w-[14px]" />,
+        disabled: !activeDocument,
+        onSelect: () => {
+          void openWithKind(mode.kind);
+        },
+      }));
+    }
     return [];
-  }, [activeDocument, activeDocument?.encoding, activeDocument?.language, requestReopenWithEncoding, saveWithEncoding, statusMenuKind, setActiveLanguage, tabSize, t]);
+  }, [activeDocument, openWithKind, requestReopenWithEncoding, saveWithEncoding, statusMenuKind, setActiveLanguage, tabSize, t]);
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -1245,18 +1488,29 @@ const FileEditorDialog = ({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === "`") {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        (event.key === "`" || event.code === "Backquote")
+      ) {
         event.preventDefault();
+        event.stopPropagation();
         setTerminalOpen((value) => !value);
+        return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "p") {
+        const inEditorTerminal =
+          event.target instanceof HTMLElement &&
+          Boolean(event.target.closest(".km-editor-terminal-panel"));
+        if (inEditorTerminal) {
+          return;
+        }
         event.preventDefault();
         setQuickOpenQuery(activePathRef.current ?? "");
         setQuickOpenOpen(true);
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, []);
 
 
@@ -1347,6 +1601,20 @@ const FileEditorDialog = ({
     ? fileDownloadUrl(uuid, activeDocument.path, true)
     : "";
 
+  const openWithModeLabel = useCallback(
+    (kind: DocumentKind) => {
+      const matched = OPEN_WITH_MODES.find((item) => item.kind === kind);
+      if (matched) {
+        return t(matched.i18nKey, matched.fallback);
+      }
+      if (kind === "too-large") {
+        return t("file_manager.editor.open_with_modes.too_large", "Too Large");
+      }
+      return t("file_manager.editor.open_with_modes.error", "Error");
+    },
+    [t],
+  );
+
   const renderOutlineNode = (node: OutlineNode, depth: number): ReactNode => {
     const expanded = !outlineCollapsed.has(node.key);
     return (
@@ -1365,13 +1633,13 @@ const FileEditorDialog = ({
           </button>
           <button
             type="button"
-            className="min-w-0 flex-1 truncate border-0 bg-transparent pr-2 py-1 text-left text-xs text-[#c5c5c5] hover:bg-[#2a2d2e]"
+            className="min-w-0 flex-1 truncate rounded-[4px] border-0 bg-transparent pr-2 py-1 text-left text-xs text-[#d4d4d4] hover:bg-white/[0.08]"
             onClick={() => revealOutlineItem(node.item)}
             title={`${node.item.label} - ${node.item.detail}`}
           >
             {node.item.label}
           </button>
-          <span className="pr-2 text-[10px] text-[#666]">{node.item.line}</span>
+          <span className="pr-2 text-[10px] text-neutral-400">{node.item.line}</span>
         </div>
         {expanded &&
           node.children.map((child) => renderOutlineNode(child, depth + 1))}
@@ -1386,7 +1654,7 @@ const FileEditorDialog = ({
 
   return createPortal(
     <div
-      className="km-file-editor !fixed !m-0 !max-w-none overflow-hidden !rounded-[6px] !border !border-[#555] !bg-[#181818] !p-0 !shadow-2xl"
+      className={`km-file-editor ${hasBackground ? "km-file-editor-has-bg !bg-[#000000]" : "!bg-[#181818]"} !fixed !m-0 !max-w-none overflow-hidden !rounded-[6px] !border !border-[#555] !p-0 !shadow-2xl`}
         style={
           fullscreen
             ? {
@@ -1412,6 +1680,16 @@ const FileEditorDialog = ({
       aria-modal="false"
       aria-label={activeDocument?.path ?? t("file_manager.editor.title", "File editor")}
     >
+      {hasBackground && (
+        <TerminalBackgroundMedia
+          url={backgroundUrl}
+          offsetX={resolvedSettings.backgroundOffsetX}
+          offsetY={resolvedSettings.backgroundOffsetY}
+          scale={resolvedSettings.backgroundScale}
+          opacity={resolvedSettings.backgroundOpacity}
+          blur={resolvedSettings.backgroundBlur}
+        />
+      )}
       <div className="sr-only">
           {t("file_manager.editor.title", "File editor")}
       </div>
@@ -1419,8 +1697,18 @@ const FileEditorDialog = ({
           {activeDocument?.path ?? t("file_manager.editor.title", "File editor")}
       </div>
 
-        <div className="flex h-full min-h-0 flex-col bg-[#181818] text-[#cccccc]">
-          <div className="flex h-9 shrink-0 items-center border-b border-[#2b2b2b] bg-[#202020] pl-3">
+        <div
+          className={`relative z-[1] flex h-full min-h-0 flex-col text-[#cccccc] ${
+            hasBackground ? "bg-transparent" : "bg-[#181818]"
+          }`}
+        >
+          <div
+            className={`flex h-9 shrink-0 items-center pl-3 ${
+              hasBackground
+                ? "border-b border-white/[0.08] bg-[#161616]/40 backdrop-blur-[12px]"
+                : "border-b border-[#2b2b2b] bg-[#202020]"
+            }`}
+          >
             <Code2 size={16} className="mr-2 text-[#55a7e0]" />
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#eeeeee]">
               {activeDocument?.path ?? t("file_manager.editor.title", "File editor")}
@@ -1444,7 +1732,13 @@ const FileEditorDialog = ({
             </button>
           </div>
 
-          <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-[#2b2b2b] bg-[#181818] px-1">
+          <div
+            className={`flex h-8 shrink-0 items-center gap-0.5 px-1 ${
+              hasBackground
+                ? "border-b border-white/[0.08] bg-[#141414]/35 backdrop-blur-[12px]"
+                : "border-b border-[#2b2b2b] bg-[#181818]"
+            }`}
+          >
             <DropdownMenu.Root>
               <DropdownMenu.Trigger>
                 <button className="h-7 px-2 text-xs text-[#cccccc] hover:bg-[#333333]">
@@ -1540,7 +1834,11 @@ const FileEditorDialog = ({
           <div ref={dockRowRef} className="relative flex min-h-0 flex-1">
             {showExplorer && (
               <aside
-                className="relative z-20 flex shrink-0 flex-col border-r border-[#2b2b2b] bg-[#181818] shadow-2xl md:static md:z-auto md:shadow-none max-md:absolute max-md:inset-y-0 max-md:left-0"
+                className={`relative z-20 flex shrink-0 flex-col shadow-2xl md:static md:z-auto md:shadow-none max-md:absolute max-md:inset-y-0 max-md:left-0 ${
+                  hasBackground
+                    ? "border-r border-white/[0.08] bg-[#121212]/55 backdrop-blur-[6px] max-md:bg-[#121212]/80"
+                    : "border-r border-[#2b2b2b] bg-[#181818]"
+                }`}
                 style={{ width: explorerWidth }}
               >
                 <div className="flex h-8 items-center px-3 text-[11px] font-semibold uppercase text-[#bbbbbb]">
@@ -1567,7 +1865,9 @@ const FileEditorDialog = ({
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={t("file_manager.editor.explorer", "Explorer")}
-                className="hidden h-full w-1 shrink-0 cursor-col-resize bg-[#2b2b2b] transition-colors hover:bg-[#55a7e0] focus-visible:bg-[#55a7e0] focus-visible:outline-none md:block"
+                className={`hidden h-full w-1 shrink-0 cursor-col-resize transition-colors hover:bg-[#55a7e0] focus-visible:bg-[#55a7e0] focus-visible:outline-none md:block ${
+                  hasBackground ? "bg-white/[0.08]" : "bg-[#2b2b2b]"
+                }`}
                 onPointerDown={(event) => handleDockResizeStart(event, "left")}
                 onPointerMove={handleDockResizeMove}
                 onPointerUp={handleDockResizeEnd}
@@ -1575,7 +1875,11 @@ const FileEditorDialog = ({
               />
             )}
 
-            <main className="flex min-w-0 flex-1 flex-col bg-[#1e1e1e]">
+            <main
+              className={`flex min-w-0 flex-1 flex-col ${
+                hasBackground ? "bg-transparent" : "bg-[#1e1e1e]"
+              }`}
+            >
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -1588,7 +1892,11 @@ const FileEditorDialog = ({
                 >
                   <div
                     ref={tabStripRef}
-                    className="flex h-9 shrink-0 overflow-x-auto overflow-y-hidden border-b border-[#2b2b2b] bg-[#181818]"
+                    className={`flex h-9 shrink-0 overflow-x-auto overflow-y-hidden ${
+                      hasBackground
+                        ? "border-b border-white/[0.08] bg-[#121212]/32 backdrop-blur-[12px]"
+                        : "border-b border-[#2b2b2b] bg-[#181818]"
+                    }`}
                     onWheel={(event) => {
                       if (!event.deltaY) return;
                       event.preventDefault();
@@ -1600,6 +1908,7 @@ const FileEditorDialog = ({
                         key={document.path}
                         document={document}
                         active={document.path === activePath}
+                        hasBackground={hasBackground}
                         onActivate={setActivePath}
                         onRequestClose={requestCloseDocument}
                         onContextMenu={(event, path) => {
@@ -1697,12 +2006,16 @@ const FileEditorDialog = ({
 
               <div className="relative min-h-0 flex-1">
                 {activeDocument?.loading && (
-                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#1e1e1e]/90 text-xs text-[#bbbbbb]">
+                  <div
+                    className={`absolute inset-0 z-10 flex items-center justify-center text-xs text-[#bbbbbb] ${
+                      hasBackground ? "bg-[#1e1e1e]/70 backdrop-blur-sm" : "bg-[#1e1e1e]/90"
+                    }`}
+                  >
                     <Loading compact />
                   </div>
                 )}
                 {!activeDocument && (
-                  <div className="flex h-full flex-col items-center justify-center gap-3 text-[#737373]">
+                  <div className="flex h-full flex-col items-center justify-center gap-3 text-neutral-400">
                     <Code2 size={52} strokeWidth={1} />
                     <span className="text-sm">{t("file_manager.editor.empty", "Open a file from Explorer")}</span>
                   </div>
@@ -1746,7 +2059,11 @@ const FileEditorDialog = ({
                   />
                 )}
                 {activeDocument?.kind === "image" && (
-                  <div className="flex h-full items-center justify-center overflow-auto bg-[#1e1e1e] p-6">
+                  <div
+                    className={`flex h-full items-center justify-center overflow-auto p-6 ${
+                      hasBackground ? "bg-transparent" : "bg-[#1e1e1e]"
+                    }`}
+                  >
                     <img
                       key={activeDocument.path}
                       src={mediaUrl}
@@ -1756,12 +2073,20 @@ const FileEditorDialog = ({
                   </div>
                 )}
                 {activeDocument?.kind === "audio" && (
-                  <div className="flex h-full items-center justify-center bg-[#1e1e1e] p-6">
+                  <div
+                    className={`flex h-full items-center justify-center p-6 ${
+                      hasBackground ? "bg-transparent" : "bg-[#1e1e1e]"
+                    }`}
+                  >
                     <audio key={activeDocument.path} controls src={mediaUrl} className="w-full max-w-2xl" />
                   </div>
                 )}
                 {activeDocument?.kind === "video" && (
-                  <div className="flex h-full items-center justify-center bg-black p-4">
+                  <div
+                    className={`flex h-full items-center justify-center p-4 ${
+                      hasBackground ? "bg-transparent" : "bg-black"
+                    }`}
+                  >
                     <video key={activeDocument.path} controls src={mediaUrl} className="max-h-full max-w-full" />
                   </div>
                 )}
@@ -1779,7 +2104,7 @@ const FileEditorDialog = ({
                   <div className="flex h-full flex-col items-center justify-center gap-3 text-[#a7a7a7]">
                     <Braces size={40} strokeWidth={1.25} />
                     <span className="text-sm">{t("file_manager.editor.too_large_preview", "File is too large to preview")}</span>
-                    <span className="text-xs text-[#777]">{formatFileSize(activeDocument.size)}</span>
+                    <span className="text-xs text-neutral-400">{formatFileSize(activeDocument.size)}</span>
                     <a href={fileDownloadUrl(uuid, activeDocument.path)} className="text-xs text-[#75beff] hover:underline">
                       {t("file_manager.download", "Download")}
                     </a>
@@ -1790,7 +2115,7 @@ const FileEditorDialog = ({
                     <Braces size={40} strokeWidth={1.25} />
                     <span className="text-sm">{t("file_manager.editor.preview_failed", "Unable to preview this file")}</span>
                     {activeDocument.errorMessage && (
-                      <span className="max-w-full truncate text-xs text-[#777]" title={activeDocument.errorMessage}>
+                      <span className="max-w-full truncate text-xs text-neutral-400" title={activeDocument.errorMessage}>
                         {activeDocument.errorMessage}
                       </span>
                     )}
@@ -1801,38 +2126,50 @@ const FileEditorDialog = ({
                 )}
               </div>
 
-              <div className="flex h-6 shrink-0 items-center bg-[#007acc] px-2 text-[11px] text-white">
-                <button
-                  type="button"
-                  className="mr-2 h-6 border-0 bg-transparent px-1 text-[11px] text-white hover:bg-black/25"
+              <div
+                className={`flex h-6 shrink-0 items-center overflow-x-auto px-2 text-[11px] text-white [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+                  hasBackground ? "bg-[#007acc]/85 backdrop-blur-sm" : "bg-[#007acc]"
+                }`}
+              >
+                <EditorCursorStatus
+                  store={cursorStore}
                   onClick={openPositionDialog}
                   title={t("file_manager.editor.go_to_position", "Go to Line/Column")}
-                >
-                  Ln {cursor.line}, Col {cursor.column}
-                </button>
+                />
                 <button
                   type="button"
-                  className="h-6 border-0 bg-transparent px-2 text-[11px] text-white hover:bg-black/25"
+                  className="h-6 shrink-0 whitespace-nowrap border-0 bg-transparent px-2 text-[11px] text-white hover:bg-black/25"
                   onClick={(event) => openStatusMenu("spaces", event)}
                 >
                   Spaces: {tabSize}
                 </button>
                 <button
                   type="button"
-                  className="h-6 px-2 text-[11px] text-white hover:bg-black/20"
+                  className="h-6 shrink-0 whitespace-nowrap px-2 text-[11px] text-white hover:bg-black/20"
                   onClick={(event) => openStatusMenu("encoding", event)}
                   title={t("file_manager.editor.encoding_hint", "Text encoding")}
                 >
                   {REMOTE_TEXT_ENCODINGS.find((encoding) => encoding.value === activeDocument?.encoding)?.label ?? "UTF-8"}
                 </button>
-                <span className="px-2">{activeDocument?.content.includes("\r\n") ? "CRLF" : "LF"}</span>
+                <span className="shrink-0 whitespace-nowrap px-2">{activeDocument?.content.includes("\r\n") ? "CRLF" : "LF"}</span>
                 <button
-                  className="h-6 px-2 text-[11px] text-white hover:bg-black/20"
+                  type="button"
+                  className="h-6 shrink-0 whitespace-nowrap px-2 text-[11px] text-white hover:bg-black/20"
                   onClick={(event) => openStatusMenu("language", event)}
                 >
                   {activeDocument?.language ?? "plaintext"}
                 </button>
-                <span className="ml-auto px-2">
+                {activeDocument && (
+                  <button
+                    type="button"
+                    className="ml-auto h-6 shrink-0 whitespace-nowrap border-0 bg-transparent px-2 text-[11px] text-white hover:bg-black/25"
+                    onClick={(event) => openStatusMenu("openWith", event)}
+                    title={t("file_manager.editor.open_with", "Open With")}
+                  >
+                    {t("file_manager.editor.open_with", "Open With")}: {openWithModeLabel(activeDocument.kind)}
+                  </button>
+                )}
+                <span className={`${activeDocument ? "px-2" : "ml-auto px-2"} shrink-0 whitespace-nowrap`}>
                   {activeDocument ? formatFileSize(activeDocument.size) : ""}
                 </span>
               </div>
@@ -1840,7 +2177,11 @@ const FileEditorDialog = ({
 
             {showOutline && (
               <aside
-                className="hidden shrink-0 flex-col border-l border-[#2b2b2b] bg-[#181818] lg:flex"
+                className={`hidden shrink-0 flex-col lg:flex ${
+                  hasBackground
+                    ? "border-l border-white/[0.08] bg-[#121212]/55 backdrop-blur-[6px]"
+                    : "border-l border-[#2b2b2b] bg-[#181818]"
+                }`}
                 style={{ width: outlineWidth }}
               >
                 <div className="flex h-8 items-center gap-2 px-3 text-[11px] font-semibold uppercase text-[#bbbbbb]">
@@ -1849,7 +2190,7 @@ const FileEditorDialog = ({
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto pb-2">
                   {outline.length === 0 ? (
-                    <div className="px-3 py-4 text-xs text-[#777]">
+                    <div className="px-3 py-4 text-xs text-neutral-400">
                       {t("file_manager.editor.no_symbols", "No symbols found")}
                     </div>
                   ) : (
@@ -1864,7 +2205,9 @@ const FileEditorDialog = ({
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={t("file_manager.editor.outline", "Outline")}
-                className="hidden h-full w-1 shrink-0 cursor-col-resize bg-[#2b2b2b] transition-colors hover:bg-[#55a7e0] focus-visible:bg-[#55a7e0] focus-visible:outline-none lg:block"
+                className={`hidden h-full w-1 shrink-0 cursor-col-resize transition-colors hover:bg-[#55a7e0] focus-visible:bg-[#55a7e0] focus-visible:outline-none lg:block ${
+                  hasBackground ? "bg-white/[0.08]" : "bg-[#2b2b2b]"
+                }`}
                 onPointerDown={(event) => handleDockResizeStart(event, "right")}
                 onPointerMove={handleDockResizeMove}
                 onPointerUp={handleDockResizeEnd}
@@ -1872,9 +2215,15 @@ const FileEditorDialog = ({
               />
             )}
           </div>
-          {terminalOpen && (
+          {(terminalMounted || terminalOpen) && (
             <EditorTerminalPanel
+              key={uuid}
               uuid={uuid}
+              visible={terminalOpen}
+              serverName={serverName}
+              serverOs={serverOs}
+              terminalSettings={resolvedSettings}
+              hasBackground={hasBackground}
               onClose={() => setTerminalOpen(false)}
             />
           )}

@@ -14,6 +14,11 @@ import type {
 import { useRPC2Call } from "./RPC2Context";
 
 const LIVE_DATA_INTERVAL_MS = 2000;
+/**
+ * 启动宽限期：刚加载时首个请求可能还没回来（或正赶上服务端冷启动），
+ * 这段时间内不显示「连接失败」警告，避免页面刚打开就闪一下红色提示。
+ */
+const LIVE_DATA_STARTUP_GRACE_MS = 8000;
 
 const sameStringArray = (left: string[], right: string[]) =>
   left.length === right.length &&
@@ -113,8 +118,23 @@ interface LiveDataContextType {
   onRefresh: (callback: (data: LiveDataResponse) => void) => () => void;
 }
 
+interface LiveDataMetaContextType {
+  /** 在线节点列表（仅在在线集合实际增减时变化，不随 2 秒数值刷新触发重渲染） */
+  online: string[] | null;
+  hasLiveData: boolean;
+  showCallout: boolean;
+  onRefresh: (callback: (data: LiveDataResponse) => void) => () => void;
+}
+
 const LiveDataContext = createContext<LiveDataContextType>({
   live_data: null,
+  showCallout: true,
+  onRefresh: () => () => {},
+});
+
+const LiveDataMetaContext = createContext<LiveDataMetaContextType>({
+  online: null,
+  hasLiveData: false,
   showCallout: true,
   onRefresh: () => () => {},
 });
@@ -125,7 +145,18 @@ export const LiveDataProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const [live_data, setLiveData] = useState<LiveDataResponse | null>(null);
   const liveDataRef = useRef<LiveDataResponse | null>(null);
-  const [showCallout, setShowCallout] = useState(false);
+  /*
+    showCallout 语义：true = 连接正常（不显示警告）。
+    初始给 true，配合下面的「启动宽限期」，避免页面刚打开、首个 RPC 还没返回时
+    就把「RPC2 请求失败」的警告闪一下。真正失败超过宽限期才显示。
+  */
+  const [showCallout, setShowCallout] = useState(true);
+  /** 页面加载后的宽限期结束时间戳：在此之前不显示连接失败提示 */
+  const calloutGraceUntilRef = useRef(
+    typeof performance !== "undefined"
+      ? performance.now() + LIVE_DATA_STARTUP_GRACE_MS
+      : 0,
+  );
   const refreshCallbacksRef = useRef<Set<(data: LiveDataResponse) => void>>(
     new Set(),
   );
@@ -184,7 +215,10 @@ export const LiveDataProvider: React.FC<{ children: React.ReactNode }> = ({
       } catch (e) {
         if (stopped) return;
         console.error("RPC2 获取最新状态失败:", e);
-        setShowCallout(false);
+        // 宽限期内保持「不报警」，避免刚载入就闪一次失败提示
+        if (performance.now() >= calloutGraceUntilRef.current) {
+          setShowCallout(false);
+        }
       } finally {
         running = false;
         scheduleNext();
@@ -210,18 +244,28 @@ export const LiveDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, [call, notifyRefreshCallbacks]);
 
+  const online = live_data?.data?.online ?? null;
+  const hasLiveData = live_data !== null;
+  const metaContextValue = useMemo(
+    () => ({ online, hasLiveData, showCallout, onRefresh }),
+    [online, hasLiveData, showCallout, onRefresh],
+  );
   const contextValue = useMemo(
     () => ({ live_data, showCallout, onRefresh }),
     [live_data, showCallout, onRefresh],
   );
 
   return (
-    <LiveDataContext.Provider value={contextValue}>
-      {children}
-    </LiveDataContext.Provider>
+    <LiveDataMetaContext.Provider value={metaContextValue}>
+      <LiveDataContext.Provider value={contextValue}>
+        {children}
+      </LiveDataContext.Provider>
+    </LiveDataMetaContext.Provider>
   );
 };
 
 export const useLiveData = () => useContext(LiveDataContext);
+// eslint-disable-next-line react-refresh/only-export-components
+export const useLiveDataMeta = () => useContext(LiveDataMetaContext);
 
 export default LiveDataContext;

@@ -4,13 +4,23 @@ import { Tooltip } from "@radix-ui/themes";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getOSImage } from "@/utils/osImageHelper";
-import type { TerminalClient, TerminalTab } from "./terminalTypes";
+import {
+  formatTabTitle,
+  type TerminalClient,
+  type TerminalTab,
+} from "./terminalTypes";
 
 interface TabButtonProps {
   tab: TerminalTab;
   client: TerminalClient | undefined;
+  latencyMs?: number;
   index: number;
   active: boolean;
+  isFocusedPane?: boolean;
+  hasBackground?: boolean;
+  orientation?: "horizontal" | "vertical";
+  showShortcutHint?: boolean;
+  showGuideTarget?: boolean;
   editing: boolean;
   draft: string;
   onActivate: () => void;
@@ -24,8 +34,14 @@ interface TabButtonProps {
 const TabButton = ({
   tab,
   client,
+  latencyMs,
   index,
   active,
+  isFocusedPane = true,
+  hasBackground = false,
+  orientation = "horizontal",
+  showShortcutHint = true,
+  showGuideTarget = active,
   editing,
   draft,
   onActivate,
@@ -36,20 +52,40 @@ const TabButton = ({
   onClose,
 }: TabButtonProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const editingStartedAtRef = useRef(0);
   const { t } = useTranslation();
 
   useEffect(() => {
-    if (editing) {
+    if (!editing) {
+      return;
+    }
+    editingStartedAtRef.current = performance.now();
+    inputRef.current?.focus();
+    inputRef.current?.select();
+    const frame = requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
-    }
+    });
+    return () => cancelAnimationFrame(frame);
   }, [editing]);
 
-  const activeBgColor = tab.color || "#000000";
-  const tabBackgroundColor = active
+  const isVertical = orientation === "vertical";
+  const isHighlighted = active && isFocusedPane;
+  const activeBgColor =
+    tab.color ||
+    (isVertical
+      ? hasBackground
+        ? "rgba(255, 255, 255, 0.14)"
+        : "rgba(255, 255, 255, 0.12)"
+      : hasBackground
+        ? "rgba(255, 255, 255, 0.14)"
+        : "#000000");
+  const tabBackgroundColor = isHighlighted
     ? activeBgColor
-    : tab.color || "rgba(255, 255, 255, 0.08)";
-  const inactiveOverlay = !active && tab.color
+    : active
+    ? tab.color || (hasBackground ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.06)")
+    : tab.color || (hasBackground ? "rgba(255, 255, 255, 0.09)" : "rgba(255, 255, 255, 0.08)");
+  const inactiveOverlay = !isHighlighted && tab.color
     ? "rgba(255, 255, 255, 0.22)"
     : "rgba(255, 255, 255, 0)";
   const tabBackgroundStyle: CSSProperties = {
@@ -58,8 +94,18 @@ const TabButton = ({
       ? `linear-gradient(${inactiveOverlay}, ${inactiveOverlay})`
       : undefined,
   };
-  const shortcutNum = index < 10 ? (index === 9 ? 0 : index + 1) : null;
-  const serverName = client?.name || tab.title;
+  const shortcutNum =
+    showShortcutHint && index < 10 ? (index === 9 ? 0 : index + 1) : null;
+  const displayTitle = formatTabTitle(tab, client?.name);
+  const serverName = displayTitle || client?.name || tab.title;
+  const latencyToneClass =
+    latencyMs === undefined
+      ? ""
+      : latencyMs < 100
+      ? "text-emerald-400"
+      : latencyMs < 250
+      ? "text-amber-400"
+      : "text-rose-400";
 
   const tooltipContent = (
     <span className="flex flex-col items-center justify-center gap-0.5 rounded-[5px] border border-neutral-700 bg-[#202020] px-2 py-1 text-center leading-tight">
@@ -74,36 +120,74 @@ const TabButton = ({
 
   return (
     <Tooltip
+      open={editing ? false : undefined}
       content={tooltipContent}
+      side={isVertical ? "left" : undefined}
       delayDuration={300}
       className="!bg-[#202020] !text-white"
     >
+      {/*
+        标签本身不加缩放/位移类反馈：tab 是贴着窗口顶边的整块区域，
+        任何 scale 都会让它看起来被压扁或拉伸（还会带动内部图标和文字模糊）。
+        选中/悬停的反馈已经由下面那层背景的 opacity + 颜色过渡完成，
+        新增/关闭/重排的补位动画由 TerminalTabBar 的 layout 负责。
+      */}
       <div
-        data-guide={active ? "terminal-tab" : undefined}
+        data-guide={showGuideTarget ? "terminal-tab" : undefined}
         role="tab"
-        aria-selected={active}
-        className={`group relative flex h-full w-full min-w-0 cursor-pointer items-center gap-2 px-3 select-none transition-colors duration-150 ${
-          active
+        aria-selected={isHighlighted}
+        className={`group relative flex h-full w-full min-w-0 cursor-pointer items-center select-none transition-colors duration-[var(--km-dur-fast)] ease-[var(--km-ease-standard)] ${
+          isVertical ? "gap-1.5 px-2" : "gap-2 px-3"
+        } ${
+          isHighlighted
             ? "z-[3] text-white"
+            : active
+            ? "z-[2] text-neutral-300 hover:text-white"
+            : hasBackground
+            ? "z-[1] text-neutral-300 hover:z-[2] hover:text-white"
             : "z-[1] text-neutral-400 hover:z-[2] hover:text-neutral-200"
         }`}
-        onClick={onActivate}
+        onMouseDown={(event) => {
+          if (editing && event.target !== inputRef.current) {
+            event.preventDefault();
+            inputRef.current?.focus();
+          }
+        }}
+        onClick={() => {
+          if (!editing) {
+            onActivate();
+          }
+        }}
         onDoubleClick={(event) => {
           event.preventDefault();
+          event.stopPropagation();
           onStartRename();
         }}
         >
           <div
-            className={`pointer-events-none absolute inset-0 rounded-t-[10px] overflow-visible transition-all duration-150 ${
-              active
+            className={`pointer-events-none absolute inset-0 overflow-visible transition-[opacity,background-color,border-color,box-shadow] duration-[var(--km-dur-fast)] ease-[var(--km-ease-standard)] ${
+              isVertical ? "rounded-[6px]" : "rounded-t-[10px]"
+            } ${
+              hasBackground && isHighlighted && !tab.color
+                ? "shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]"
+                : ""
+            } ${
+              isHighlighted
                 ? "opacity-100"
+              : active
+              ? "opacity-80 group-hover:opacity-100"
               : tab.color
               ? "opacity-90 group-hover:opacity-100"
               : "opacity-0 group-hover:opacity-100"
             }`}
             style={tabBackgroundStyle}
           />
-
+        {isVertical && isHighlighted && !tab.color && (
+          <span
+            className="pointer-events-none absolute bottom-1.5 left-0 top-1.5 z-[2] w-[2px] rounded-full bg-[#55a7e0]"
+            aria-hidden="true"
+          />
+        )}
         <img
           src={getOSImage(client?.os || "")}
           alt=""
@@ -114,11 +198,17 @@ const TabButton = ({
         {editing ? (
           <input
             ref={inputRef}
-            className="relative z-[1] h-5 min-w-0 flex-1 rounded-[3px] border border-blue-500/70 bg-[#111111] px-1.5 text-xs text-white outline-none"
+            className={`relative z-[1] h-5 min-w-0 flex-1 rounded-[3px] border border-blue-500/70 bg-[#111111] px-1.5 text-white outline-none ${
+              isVertical ? "text-[11px]" : "text-xs"
+            }`}
             value={draft}
             onChange={(event) => onDraftChange(event.target.value)}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
             onKeyDown={(event) => {
+              event.stopPropagation();
               if (event.key === "Enter") {
                 event.preventDefault();
                 onCommitRename();
@@ -128,22 +218,48 @@ const TabButton = ({
                 onCancelRename();
               }
             }}
-            onBlur={onCommitRename}
+            onBlur={(event) => {
+              const related = event.relatedTarget;
+              if (
+                performance.now() - editingStartedAtRef.current < 150 ||
+                (related instanceof HTMLElement &&
+                  related.closest(
+                    "[data-radix-popper-content-wrapper], [data-slot='dropdown-menu-trigger']",
+                  ))
+              ) {
+                requestAnimationFrame(() => {
+                  inputRef.current?.focus();
+                  inputRef.current?.select();
+                });
+                return;
+              }
+              onCommitRename();
+            }}
             aria-label={t("terminal.rename_tab")}
           />
         ) : (
           <span
-            className={`relative z-[1] min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-left text-xs ${
-              active ? "font-medium text-white" : "font-normal"
+            className={`relative z-[1] min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-left ${
+              isVertical ? "text-[11px]" : "text-xs"
+            } ${
+              isHighlighted ? "font-medium text-white" : "font-normal"
             }`}
           >
-            {tab.title}
+            {displayTitle}
+          </span>
+        )}
+
+        {!editing && latencyMs !== undefined && (
+          <span
+            className={`relative z-[1] shrink-0 font-mono text-[10px] tabular-nums opacity-85 ${latencyToneClass}`}
+          >
+            {latencyMs}ms
           </span>
         )}
 
         <button
           type="button"
-          className="relative z-[1] ml-auto inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] text-current opacity-40 transition-opacity duration-150 hover:bg-white/20 hover:opacity-100"
+          className="relative z-[1] ml-auto inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] text-current opacity-40 transition-opacity duration-[var(--km-dur-fast)] ease-[var(--km-ease-standard)] hover:bg-white/20 hover:opacity-100"
           tabIndex={-1}
           onClick={(event) => {
             event.stopPropagation();

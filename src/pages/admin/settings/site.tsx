@@ -1,6 +1,5 @@
 import { useTranslation } from "react-i18next";
 import { Button, Dialog, Flex, Text } from "@radix-ui/themes";
-import { updateSettingsWithToast, useSettings } from "@/lib/api";
 import {
   SettingCardButton,
   SettingCardCollapse,
@@ -8,18 +7,32 @@ import {
   SettingCardLabel,
   SettingCardLongTextInput,
   SettingCardShortTextInput,
+  SettingCardsLoading,
   SettingCardSwitch,
 } from "@/components/admin/SettingCard";
 import { toast } from "sonner";
-import Loading from "@/components/loading";
 import { DownloadIcon } from "lucide-react";
 import { useRef, useState } from "react";
 import UploadDialog from "@/components/UploadDialog";
 import { createChunkUploadTask, type ChunkUploadTask } from "@/lib/chunkUpload";
+import { HighlightPulse } from "@/components/motion";
+import { api, requestJson } from "@/lib/http";
+import { useRouteQuery } from "@/lib/routeData";
+import { DEFAULT_SETTINGS, settingsErrorText, settingsQuery } from "@/routeQueries/settings";
+import { saveSettings, serverError } from "./shared/request";
 
 export default function SiteSettings() {
   const { t } = useTranslation();
-  const { settings, loading, error, refetch } = useSettings();
+  // 页面切换时设置已由 routePreload 提前请求；等待预算内到达直接显示，否则设置卡显示色块
+  const settingsResult = useRouteQuery(settingsQuery);
+  const settings = settingsResult.data ?? DEFAULT_SETTINGS;
+  const loading = settingsResult.loading;
+  const error = settingsErrorText(settingsResult.error);
+  const setSettings = settingsResult.setData;
+  // 生成/撤销临时分享后静默重新读取（与原来的 refetch 一样不显示骨架）
+  const refetch = async () => {
+    setSettings(await settingsQuery.fetch());
+  };
   const [shareHours, setShareHours] = useState(1);
 
   // 恢复备份对话框与上传状态
@@ -63,23 +76,22 @@ export default function SiteSettings() {
     setRestoreProgress(0);
   };
 
-  if (loading) {
-    return <Loading />;
-  }
-
+  // 加载中渲染真实设置卡片（默认值），每张卡画成同尺寸的色块；数据到达后同一批 DOM 淡入
   if (error) {
     return <Text color="red">{error}</Text>;
   }
 
   return (
     <>
+    <div className="flex w-full flex-col gap-km-block">
+    <SettingCardsLoading loading={loading}>
       <SettingCardLabel>{t("settings.site.title")}</SettingCardLabel>
       <SettingCardShortTextInput
         title={t("settings.site.name")}
         description={t("settings.site.name_description")}
         defaultValue={settings.sitename || ""}
         OnSave={async (data) => {
-          await updateSettingsWithToast({ sitename: data }, t);
+          await saveSettings({ sitename: data }, t);
         }}
       />
       <SettingCardLongTextInput
@@ -87,7 +99,7 @@ export default function SiteSettings() {
         description={t("settings.site.description_description")}
         defaultValue={settings.description || ""}
         OnSave={async (data) => {
-          await updateSettingsWithToast({ description: data }, t);
+          await saveSettings({ description: data }, t);
         }}
       />
       <SettingCardSwitch
@@ -95,7 +107,7 @@ export default function SiteSettings() {
         description={t("settings.site.cors_origin_check_enabled_description")}
         defaultChecked={settings.cors_origin_check_enabled ?? true}
         onChange={async (checked) => {
-          await updateSettingsWithToast({ cors_origin_check_enabled: checked }, t);
+          await saveSettings({ cors_origin_check_enabled: checked }, t);
         }}
         className="km-page-admin-settings-site km-setting-card"
       />
@@ -106,7 +118,7 @@ export default function SiteSettings() {
         )}
         defaultValue={settings.cors_allowed_origins || ""}
         OnSave={async (data) => {
-          await updateSettingsWithToast({ cors_allowed_origins: data }, t);
+          await saveSettings({ cors_allowed_origins: data }, t);
         }}
       />
       <SettingCardSwitch
@@ -117,7 +129,7 @@ export default function SiteSettings() {
         )}
         defaultChecked={settings.ws_origin_check_enabled ?? true}
         onChange={async (checked) => {
-          await updateSettingsWithToast(
+          await saveSettings(
             { ws_origin_check_enabled: checked },
             t,
           );
@@ -131,7 +143,7 @@ export default function SiteSettings() {
         )}
         defaultValue={settings.ws_allowed_origins || ""}
         OnSave={async (data) => {
-          await updateSettingsWithToast({ ws_allowed_origins: data }, t);
+          await saveSettings({ ws_allowed_origins: data }, t);
         }}
       />
       <SettingCardSwitch
@@ -139,7 +151,7 @@ export default function SiteSettings() {
         description={t("settings.site.ssrf_protection_enabled_description")}
         defaultChecked={settings.ssrf_protection_enabled ?? false}
         onChange={async (checked) => {
-          await updateSettingsWithToast(
+          await saveSettings(
             { ssrf_protection_enabled: checked },
             t,
           );
@@ -151,7 +163,7 @@ export default function SiteSettings() {
         description={t("settings.site.send_ip_addr_to_guest_description")}
         defaultChecked={settings.send_ip_addr_to_guest}
         onChange={async (checked) => {
-          await updateSettingsWithToast({ send_ip_addr_to_guest: checked }, t);
+          await saveSettings({ send_ip_addr_to_guest: checked }, t);
         }}
         className="km-setting-card"
       />
@@ -161,7 +173,7 @@ export default function SiteSettings() {
         placeholder={`${window.location.origin}`}
         defaultValue={settings.script_domain || ""}
         OnSave={async (data) => {
-          await updateSettingsWithToast({ script_domain: data }, t);
+          await saveSettings({ script_domain: data }, t);
         }}
       />
       <SettingCardLabel>{t("settings.site.private_site")}</SettingCardLabel>
@@ -170,7 +182,7 @@ export default function SiteSettings() {
         description={t("settings.site.private_site_description")}
         defaultChecked={settings.private_site}
         onChange={async (checked) => {
-          await updateSettingsWithToast({ private_site: checked }, t);
+          await saveSettings({ private_site: checked }, t);
         }}
         className="km-setting-card"
       />
@@ -178,7 +190,12 @@ export default function SiteSettings() {
         title={t("settings.site.temporary_share")}
         description={t("settings.site.temporary_share_description")}
       >
-        <div className="flex w-full flex-col gap-4">
+        <div className="flex w-full flex-col gap-km-block">
+          {/*
+            feedback 性格：临时分享链接只在 token 真的变化（生成/撤销）时脉冲一次，
+            轮询或普通重渲染不会触发，不会变成持续闪烁的噪声。
+          */}
+          <HighlightPulse trigger={settings.tempory_share_token}>
           <SettingCardShortTextInput
             title={t("settings.site.temporary_share_current_link")}
             value={
@@ -203,6 +220,7 @@ export default function SiteSettings() {
               {t("common.copy")}
             </Button>
           </SettingCardShortTextInput>
+          </HighlightPulse>
           <SettingCardShortTextInput
             title={t("settings.site.temporary_share_hours")}
             bordless
@@ -225,7 +243,7 @@ export default function SiteSettings() {
                 for (let i = 0; i < 8; i++) {
                   key += chars.charAt(Math.floor(Math.random() * chars.length));
                 }
-                await updateSettingsWithToast(
+                await saveSettings(
                   {
                     tempory_share_token: key,
                     tempory_share_token_expire_at:
@@ -242,7 +260,7 @@ export default function SiteSettings() {
               color="red"
               variant="soft"
               onClick={async () => {
-                await updateSettingsWithToast(
+                await saveSettings(
                   { tempory_share_token: "", tempory_share_token_expire_at: 0 },
                   t,
                 );
@@ -254,16 +272,22 @@ export default function SiteSettings() {
           </div>
         </div>
       </SettingCardCollapse>
-      <SettingCardLabel>{t("settings.site.custom")}</SettingCardLabel>
-      <label className="text-sm text-muted-foreground -mt-4">
-        {t("settings.custom.note")}
-      </label>
+      {/* 小标题 + 说明是同一个标题块（inline），标题块整体离下方卡片 group，离上一组 section */}
+      <div className="km-section-title flex flex-col gap-km-inline">
+        {/* 外层已带 km-section-title；这里不用 SettingCardLabel，避免它自带的负下边距叠到说明上 */}
+        <label className="block text-xl font-bold" style={{ fontWeight: 600 }}>
+          {t("settings.site.custom")}
+        </label>
+        <label className="text-sm text-muted-foreground">
+          {t("settings.custom.note")}
+        </label>
+      </div>
       <SettingCardLongTextInput
         title={t("settings.custom.header")}
         description={t("settings.custom.header_description")}
         defaultValue={settings.custom_head || ""}
         OnSave={async (data) => {
-          await updateSettingsWithToast({ custom_head: data }, t);
+          await saveSettings({ custom_head: data }, t);
         }}
       />
       <SettingCardLongTextInput
@@ -274,7 +298,7 @@ export default function SiteSettings() {
         )}
         defaultValue={settings.custom_body || ""}
         OnSave={async (data) => {
-          await updateSettingsWithToast({ custom_body: data }, t);
+          await saveSettings({ custom_body: data }, t);
         }}
       />
       <SettingCardCollapse
@@ -323,7 +347,7 @@ export default function SiteSettings() {
                     "这将恢复默认的 Favicon 图标，是否继续？",
                   )}
                 </Dialog.Description>
-                <Flex gap="2" justify="end">
+                <Flex gap="2" justify="end" mt="5">
                   <Dialog.Close>
                     <Button variant="soft">{t("common.cancel", "取消")}</Button>
                   </Dialog.Close>
@@ -331,23 +355,18 @@ export default function SiteSettings() {
                     <Button
                       color="red"
                       onClick={async () => {
-                        fetch("/api/admin/update/favicon", {
-                          method: "POST",
-                        })
-                          .then((response) => {
-                            return response.json();
-                          })
-                          .then((data) => {
-                            if (data.status === "success") {
-                              toast.success(t("settings.custom.favicon_default_success"));
-                            } else {
-                              toast.error(
-                                data.message || t("settings.custom.favicon_default_error"),
-                              );
-                            }
+                        api
+                          .post("/api/admin/update/favicon")
+                          .then(() => {
+                            toast.success(t("settings.custom.favicon_default_success"));
                           })
                           .catch((error) => {
-                            toast.error("" + error);
+                            const failure = serverError(error);
+                            toast.error(
+                              failure
+                                ? failure.message || t("settings.custom.favicon_default_error")
+                                : "" + error,
+                            );
                           });
                       }}
                     >
@@ -366,28 +385,25 @@ export default function SiteSettings() {
                   const file = (e.target as HTMLInputElement).files?.[0];
                   if (file) {
                     try {
-                      const response = await fetch(
-                        "/api/admin/update/favicon",
-                        {
-                          method: "PUT",
-                          body: file,
-                          headers: {
-                            "Content-Type": "application/octet-stream",
-                          },
+                      await requestJson("/api/admin/update/favicon", {
+                        method: "PUT",
+                        body: file,
+                        headers: {
+                          "Content-Type": "application/octet-stream",
                         },
+                      });
+                      toast.success(
+                        t(
+                          "settings.custom.favicon_update_success"
+                        ),
                       );
-                      const data = await response.json();
-                      if (data.status === "success") {
-                        toast.success(
-                          t(
-                            "settings.custom.favicon_update_success"
-                          ),
-                        );
-                      } else {
-                        toast.error(data.message || "Failed to update Favicon");
-                      }
                     } catch (error) {
-                      toast.error("" + error);
+                      const failure = serverError(error);
+                      toast.error(
+                        failure
+                          ? failure.message || "Failed to update Favicon"
+                          : "" + error,
+                      );
                     }
                   }
                 };
@@ -418,6 +434,8 @@ export default function SiteSettings() {
       >
         {t("common.select")}
       </SettingCardButton>
+    </SettingCardsLoading>
+    </div>
 
       {/* 上传备份对话框 */}
       <UploadDialog

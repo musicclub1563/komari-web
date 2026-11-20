@@ -1,26 +1,25 @@
-import { DropdownMenu, IconButton } from "@radix-ui/themes";
+import { DropdownMenu } from "@radix-ui/themes";
 import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { resources } from "../i18n/config";
+import { SUPPORTED_LANGUAGES, loadLocaleBundle } from "../i18n/config";
 import { writeLanguageCookie } from "@/utils/language";
+import { CONTROL_MOTION } from "@/lib/motion";
+import { MotionIconButton } from "./ui/motion-radix";
 interface LanguageSwitch {
   icon?: ReactNode;
 }
 
-const languages: { code: string; name: string }[] = Object.entries(resources)
-  .filter(([, res]) => typeof res === "object" && res !== null && "name" in res && typeof (res as any).name === "string")
-  .map(([code, res]) => ({
-    code,
-    name: (res as any).name as string,
-  })).sort((a, b) => a.code.localeCompare(b.code));
-
 const LanguageSwitch = ({ icon }: LanguageSwitch = {}) => {
   const { i18n, t } = useTranslation();
+  // control 层：按钮本身是 motion 元素（不额外包 div），Trigger 的属性/焦点直接落在按钮上
   const trigger = icon ?? (
-    <IconButton
+    <MotionIconButton
       variant="soft"
       title={t("common.language", "Language")}
       aria-label={t("common.language", "Language")}
+      whileHover={CONTROL_MOTION.hover}
+      whileTap={CONTROL_MOTION.tap}
+      transition={CONTROL_MOTION.transition}
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="50%" viewBox="0 0 24 24">
         <g fill="none">
@@ -30,17 +29,19 @@ const LanguageSwitch = ({ icon }: LanguageSwitch = {}) => {
           />
         </g>
       </svg>
-    </IconButton>
+    </MotionIconButton>
   );
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger className="km-language-switch">{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Content>
-        {languages.map((lang) => (
+        {SUPPORTED_LANGUAGES.map((lang) => (
           <DropdownMenu.Item
             key={lang.code}
+            onPointerEnter={() => void loadLocaleBundle(lang.code).catch(() => undefined)}
+            onFocus={() => void loadLocaleBundle(lang.code).catch(() => undefined)}
             onClick={() => {
-              i18n.changeLanguage(lang.code);
+              void i18n.changeLanguage(lang.code);
               writeLanguageCookie(lang.code);
             }}
           >

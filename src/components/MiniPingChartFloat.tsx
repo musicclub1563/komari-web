@@ -1,6 +1,11 @@
-import React, { useState, useRef, useCallback, useEffect } from "react";
-import { Popover } from "@radix-ui/themes";
-import MiniPingChart from "./MiniPingChart";
+import React, { lazy, Suspense, useState, useRef, useCallback, useEffect } from "react";
+import { Card, Popover } from "@radix-ui/themes";
+import { motion } from "motion/react";
+import { CONTROL_MOTION, MOTION_SPRING, MOTION_TRANSITION } from "@/lib/motion";
+import Loading from "@/components/loading";
+
+const loadMiniPingChart = () => import("./MiniPingChart");
+const MiniPingChart = lazy(loadMiniPingChart);
 
 interface FloatMiniPingChartProps {
   uuid: string;
@@ -30,6 +35,7 @@ const MiniPingChartFloat: React.FC<FloatMiniPingChartProps> = ({
   useEffect(() => clearHoverTimeout, [clearHoverTimeout]);
 
   const handleMouseEnter = useCallback(() => {
+    void loadMiniPingChart();
     clearHoverTimeout();
     hoverTimeoutRef.current = window.setTimeout(() => {
       setOpen(true);
@@ -44,6 +50,7 @@ const MiniPingChartFloat: React.FC<FloatMiniPingChartProps> = ({
   }, [clearHoverTimeout]);
 
   const handleClick = useCallback(() => {
+    void loadMiniPingChart();
     clearHoverTimeout();
     setOpen((prev) => !prev);
   }, [clearHoverTimeout]);
@@ -51,15 +58,18 @@ const MiniPingChartFloat: React.FC<FloatMiniPingChartProps> = ({
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger>
-        <span
+        <motion.span
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
           onClick={handleClick}
+          whileHover={CONTROL_MOTION.hover}
+          whileTap={CONTROL_MOTION.tap}
+          transition={CONTROL_MOTION.transition}
           style={{ cursor: "pointer" }}
           className="km-mini-ping-chart-float flex items-center justify-center"
         >
           {trigger}
-        </span>
+        </motion.span>
       </Popover.Trigger>
       <Popover.Content
         sideOffset={5}
@@ -80,12 +90,35 @@ const MiniPingChartFloat: React.FC<FloatMiniPingChartProps> = ({
         }}
       >
         {open && (
-          <MiniPingChart
-            hours={hours}
-            uuid={uuid}
-            width="100%"
-            height={chartHeight}
-          />
+          // overlay 层：图表从触发点「长出来」，与全站弹层同一节奏
+          <motion.div
+            initial={{ opacity: 0, scale: 0.97, y: -4 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{
+              scale: MOTION_SPRING.soft,
+              y: MOTION_SPRING.soft,
+              opacity: MOTION_TRANSITION.fade,
+            }}
+          >
+            <Suspense
+              fallback={
+                <Card
+                  size="2"
+                  style={{ width: "100%", height: chartHeight }}
+                  className="km-mini-ping-chart flex items-center justify-center"
+                >
+                  <Loading reveal={false} />
+                </Card>
+              }
+            >
+              <MiniPingChart
+                hours={hours}
+                uuid={uuid}
+                width="100%"
+                height={chartHeight}
+              />
+            </Suspense>
+          </motion.div>
         )}
       </Popover.Content>
     </Popover.Root>

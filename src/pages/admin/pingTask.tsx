@@ -1,4 +1,3 @@
-import Loading from "@/components/loading";
 import NodeSelectorDialog from "@/components/NodeSelectorDialog";
 import {
   NodeDetailsProvider,
@@ -22,8 +21,14 @@ import {
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { AutoHeight, SlideSwap } from "@/components/motion";
+import { Skeletonize, skeletonText } from "@/components/ui/skeleton";
 import { TaskView } from "./pingTask_Task";
 import { ServerView } from "./pingTask_Server";
+import { KmTabsList } from "@/components/admin/KmTabsList";
+import PageHeader from "@/components/PageHeader";
+import { ApiError } from "@/lib/http";
+import { postPingTask } from "./pingTask/api";
 
 const PingTask = () => {
   return (
@@ -36,40 +41,73 @@ const PingTask = () => {
 };
 
 const InnerLayout = () => {
-  const { pingTasks, isLoading, error } = usePingTask();
+  const { pingTasks, error } = usePingTask();
   const { isLoading: nodeDetailLoading, error: nodeDetailError } =
     useNodeDetails();
   const { t } = useTranslation();
+  const [tab, setTab] = React.useState<"task" | "server">("task");
+  const [direction, setDirection] = React.useState(1);
+  // 任务列表看 pingTasks 是否到达；节点的 isLoading 只表示首次加载（第一帧起为 true，刷新不再置 true）
+  const pending = pingTasks === null || nodeDetailLoading;
 
-  if (isLoading || nodeDetailLoading) {
-    return <Loading />;
-  }
   if (error || nodeDetailError) {
     return <div>{error || nodeDetailError}</div>;
   }
   return (
-    <Flex direction="column" gap="4" className="km-page-admin-pingtask p-4">
-      <div className="flex justify-between items-center">
-        <label className="text-2xl font-bold">{t("ping.title")}</label>
-        <AddButton />
-      </div>
-      <Tabs.Root defaultValue="task" className="km-pingtask-nav">
-        <Tabs.List>
+    <div className="km-page km-page-admin-pingtask">
+      <PageHeader title={t("ping.title")} actions={<AddButton />} />
+      <Tabs.Root
+        value={tab}
+        onValueChange={(next) => {
+          const nextTab = next === "server" ? "server" : "task";
+          setDirection(nextTab === "server" ? 1 : -1);
+          setTab(nextTab);
+        }}
+        className="km-pingtask-nav"
+      >
+        {/* control 性格：选中下划线在标签间弹簧滑动（共享指示器，可被打断） */}
+        <KmTabsList>
           <Tabs.Trigger value="task">{t("ping.task_view")}</Tabs.Trigger>
           <Tabs.Trigger value="server">{t("ping.server_view")}</Tabs.Trigger>
-        </Tabs.List>
-        <Box pt="3">
-          <Tabs.Content value="task" className="km-pingtask-view">
-            <TaskView pingTasks={pingTasks ?? []} />
+        </KmTabsList>
+        {/*
+          surface 层：任务视图 / 服务器视图切换使用统一的横向方向切换（SlideSwap），
+          两个视图行数不同，外层高度由 AutoHeight 弹簧过渡，不跳。
+          加载中：用占位行渲染真实表格并骨架化；到达后同一位置揭开（key 换一棵子树，本地排序状态直接取真实数据）。
+        */}
+        <AutoHeight className="overflow-x-clip">
+        <Box pt="4">
+          <Skeletonize loading={pending} className="km-setting-card-skeleton">
+          <Tabs.Content value={tab} forceMount className="km-pingtask-view">
+            <SlideSwap swapKey={tab} direction={direction}>
+              {tab === "task" ? (
+                <TaskView
+                  key={pending ? "placeholder" : "data"}
+                  pingTasks={pending ? PLACEHOLDER_TASKS : (pingTasks ?? [])}
+                />
+              ) : (
+                <ServerView pingTasks={pending ? [] : (pingTasks ?? [])} loading={pending} />
+              )}
+            </SlideSwap>
           </Tabs.Content>
-          <Tabs.Content value="server" className="km-pingtask-view">
-            <ServerView pingTasks={pingTasks ?? []} />
-          </Tabs.Content>
+          </Skeletonize>
         </Box>
+        </AutoHeight>
       </Tabs.Root>
-    </Flex>
+    </div>
   );
 };
+
+/** 占位任务行：真实行组件 + 数字宽空白（负 id 不会与真实任务冲突；子树 inert，不会被提交） */
+const PLACEHOLDER_TASKS: PingTask[] = Array.from({ length: 5 }, (_, i) => ({
+  id: -1 - i,
+  name: skeletonText(8 + (i % 3) * 2),
+  type: skeletonText(4),
+  target: skeletonText(12),
+  interval: skeletonText(2) as unknown as number,
+  clients: [],
+  default_on: false,
+}));
 
 const AddButton: React.FC = () => {
   const { t } = useTranslation();
@@ -83,10 +121,6 @@ const AddButton: React.FC = () => {
   const [saving, setSaving] = React.useState(false);
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!defaultOn && selected.length === 0) {
-      toast.error(t("ping.default_on_description"));
-      return;
-    }
     const payload = {
       name: e.currentTarget.ping_name.value,
       type: selectedType,
@@ -96,33 +130,17 @@ const AddButton: React.FC = () => {
       interval: parseInt(e.currentTarget.interval.value, 10),
     };
     setSaving(true);
-    fetch("/api/admin/ping/add", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    })
-      .then((response) => {
-        if (response.ok) {
-          setIsOpen(false);
-          setSelected([]);
-          setDefaultOn(false);
-          setSelectedType("icmp");
-          toast.success(t("common.success"));
-        } else {
-          response
-            .json()
-            .then((data) => {
-              toast.error(data?.message || t("common.error"));
-            })
-            .catch((error) => {
-              toast.error(error.message);
-            });
-        }
+    postPingTask("/api/admin/ping/add", payload, t)
+      .then(() => {
+        setIsOpen(false);
+        setSelected([]);
+        setDefaultOn(false);
+        setSelectedType("icmp");
+        toast.success(t("common.success"));
       })
       .catch((error) => {
-        console.error("Error adding ping task:", error);
+        // 与原实现一致：只有网络等非 HTTP 错误才打印
+        if (!(error instanceof ApiError)) console.error("Error adding ping task:", error);
         toast.error(error.message);
       })
       .finally(() => {
@@ -190,7 +208,7 @@ const AddButton: React.FC = () => {
               type="number"
               placeholder="60"
             />
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-2 mt-km-block">
               <Dialog.Close>
                 <Button variant="soft">{t("common.close")}</Button>
               </Dialog.Close>

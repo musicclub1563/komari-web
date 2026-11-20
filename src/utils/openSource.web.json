@@ -63,13 +63,6 @@
     "url": "https://www.npmjs.com/package/@radix-ui/react-icons"
   },
   {
-    "name": "@radix-ui/react-label",
-    "version": "2.1.7",
-    "license": "MIT",
-    "dev": false,
-    "url": "https://www.npmjs.com/package/@radix-ui/react-label"
-  },
-  {
     "name": "@radix-ui/react-slot",
     "version": "1.2.3",
     "license": "MIT",
@@ -87,15 +80,8 @@
     "name": "@tailwindcss/vite",
     "version": "4.1.5",
     "license": "MIT",
-    "dev": false,
+    "dev": true,
     "url": "https://www.npmjs.com/package/@tailwindcss/vite"
-  },
-  {
-    "name": "@tanstack/react-table",
-    "version": "8.21.3",
-    "license": "MIT",
-    "dev": false,
-    "url": "https://www.npmjs.com/package/@tanstack/react-table"
   },
   {
     "name": "@types/lodash",
@@ -103,6 +89,13 @@
     "license": "MIT",
     "dev": true,
     "url": "https://www.npmjs.com/package/@types/lodash"
+  },
+  {
+    "name": "@types/node",
+    "version": "22.15.17",
+    "license": "MIT",
+    "dev": true,
+    "url": "https://www.npmjs.com/package/@types/node"
   },
   {
     "name": "@types/react",
@@ -119,13 +112,6 @@
     "url": "https://www.npmjs.com/package/@types/react-dom"
   },
   {
-    "name": "@types/uuid",
-    "version": "10.0.0",
-    "license": "MIT",
-    "dev": false,
-    "url": "https://www.npmjs.com/package/@types/uuid"
-  },
-  {
     "name": "@vitejs/plugin-react",
     "version": "4.4.1",
     "license": "MIT",
@@ -133,11 +119,32 @@
     "url": "https://www.npmjs.com/package/@vitejs/plugin-react"
   },
   {
+    "name": "@xterm/addon-clipboard",
+    "version": "0.2.0",
+    "license": "MIT",
+    "dev": false,
+    "url": "https://www.npmjs.com/package/@xterm/addon-clipboard"
+  },
+  {
     "name": "@xterm/addon-fit",
     "version": "0.11.0",
     "license": "MIT",
     "dev": false,
     "url": "https://www.npmjs.com/package/@xterm/addon-fit"
+  },
+  {
+    "name": "@xterm/addon-image",
+    "version": "0.9.0",
+    "license": "MIT",
+    "dev": false,
+    "url": "https://www.npmjs.com/package/@xterm/addon-image"
+  },
+  {
+    "name": "@xterm/addon-ligatures",
+    "version": "0.10.0",
+    "license": "MIT",
+    "dev": false,
+    "url": "https://www.npmjs.com/package/@xterm/addon-ligatures"
   },
   {
     "name": "@xterm/addon-search",
@@ -152,6 +159,13 @@
     "license": "MIT",
     "dev": false,
     "url": "https://www.npmjs.com/package/@xterm/addon-web-links"
+  },
+  {
+    "name": "@xterm/addon-webgl",
+    "version": "0.19.0",
+    "license": "MIT",
+    "dev": false,
+    "url": "https://www.npmjs.com/package/@xterm/addon-webgl"
   },
   {
     "name": "@xterm/xterm",
@@ -192,7 +206,7 @@
     "name": "dotenv",
     "version": "16.5.0",
     "license": "BSD-2-Clause",
-    "dev": false,
+    "dev": true,
     "url": "https://www.npmjs.com/package/dotenv"
   },
   {
@@ -231,25 +245,11 @@
     "url": "https://www.npmjs.com/package/globals"
   },
   {
-    "name": "http-proxy-middleware",
-    "version": "3.0.5",
-    "license": "MIT",
-    "dev": false,
-    "url": "https://www.npmjs.com/package/http-proxy-middleware"
-  },
-  {
     "name": "i18next",
     "version": "25.1.2",
     "license": "MIT",
     "dev": false,
     "url": "https://www.npmjs.com/package/i18next"
-  },
-  {
-    "name": "i18next-browser-languagedetector",
-    "version": "8.1.0",
-    "license": "MIT",
-    "dev": false,
-    "url": "https://www.npmjs.com/package/i18next-browser-languagedetector"
   },
   {
     "name": "lucide-react",
@@ -267,17 +267,10 @@
   },
   {
     "name": "motion",
-    "version": "12.10.5",
+    "version": "12.43.0",
     "license": "MIT",
     "dev": false,
     "url": "https://www.npmjs.com/package/motion"
-  },
-  {
-    "name": "next-themes",
-    "version": "0.4.6",
-    "license": "MIT",
-    "dev": false,
-    "url": "https://www.npmjs.com/package/next-themes"
   },
   {
     "name": "react",
@@ -311,15 +304,8 @@
     "name": "react-router-dom",
     "version": "7.16.0",
     "license": "MIT",
-    "dev": true,
-    "url": "https://www.npmjs.com/package/react-router-dom"
-  },
-  {
-    "name": "react-toastify",
-    "version": "11.0.5",
-    "license": "MIT",
     "dev": false,
-    "url": "https://www.npmjs.com/package/react-toastify"
+    "url": "https://www.npmjs.com/package/react-router-dom"
   },
   {
     "name": "recharts",
@@ -360,7 +346,7 @@
     "name": "tailwindcss",
     "version": "4.1.5",
     "license": "MIT",
-    "dev": false,
+    "dev": true,
     "url": "https://www.npmjs.com/package/tailwindcss"
   },
   {
@@ -373,9 +359,9 @@
   {
     "name": "twemoji",
     "version": "14.0.2",
-    "license": "MIT AND CC-BY-4.0",
+    "license": "CC-BY-4.0",
     "dev": false,
-    "url": "https://www.npmjs.com/package/twemoji"
+    "url": "https://github.com/twitter/twemoji"
   },
   {
     "name": "typescript",
@@ -392,13 +378,6 @@
     "url": "https://www.npmjs.com/package/typescript-eslint"
   },
   {
-    "name": "uuid",
-    "version": "11.1.1",
-    "license": "MIT",
-    "dev": false,
-    "url": "https://www.npmjs.com/package/uuid"
-  },
-  {
     "name": "vaul",
     "version": "1.1.2",
     "license": "MIT",
@@ -411,13 +390,6 @@
     "license": "MIT",
     "dev": true,
     "url": "https://www.npmjs.com/package/vite"
-  },
-  {
-    "name": "vite-plugin-pages",
-    "version": "0.33.0",
-    "license": "MIT",
-    "dev": true,
-    "url": "https://www.npmjs.com/package/vite-plugin-pages"
   },
   {
     "name": "vite-plugin-pwa",

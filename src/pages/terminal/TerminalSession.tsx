@@ -1,10 +1,13 @@
-import { useEffect, useId, useRef } from "react";
+import "@xterm/xterm/css/xterm.css";
+import { memo, useEffect, useId, useRef } from "react";
 import type { CSSProperties } from "react";
 import { Terminal } from "@xterm/xterm";
 import type { ITerminalOptions } from "@xterm/xterm";
+import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { WebglAddon as WebglAddonType } from "@xterm/addon-webgl";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -23,39 +26,69 @@ export interface TerminalSessionApi {
 interface TerminalSessionProps {
   uuid: string;
   active: boolean;
+  initialRequestId?: string;
+  fontFamily?: string;
   fontSize?: number;
+  convertEol?: boolean;
+  hasBackground?: boolean;
   padding?: number;
   twoFaEnabled: boolean;
   disconnectMessage: string;
   onApiChange: (api: TerminalSessionApi | null) => void;
+  onLatencyChange?: (latencyMs: number | null) => void;
+  onTitleChange?: (title: string) => void;
 }
 
 const RECONNECT_INTERVAL = 1000;
 // 与 Server/Agent 的会话保留窗口（5 分钟）保持一致，Agent 离线恢复后会话仍可续用。
 const RECONNECT_WINDOW = 5 * 60 * 1000;
+// 被控端通常几百毫秒内就附着上，等待提示延迟出现，避免每次打开都闪一下。
+const WAITING_HINT_DELAY = 800;
 
 const encode = (value: string) => new TextEncoder().encode(value);
 
 const normalizePaste = (value: string) => value.replace(/\r?\n/g, "\r");
 
+// 过滤粘贴文本中可能夹带的 Bracketed Paste 起止控制序列，防止提前闭合粘贴块。
+const sanitizeBracketedPaste = (value: string) =>
+  // eslint-disable-next-line no-control-regex
+  value.replace(/\x1b\[20[01]~/g, "");
+
+const createClientId = () =>
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
 // 单个终端标签的 xterm、WebSocket 与快捷键会话
 const TerminalSession = ({
   uuid,
   active,
+  initialRequestId,
+  fontFamily = DEFAULT_TERMINAL_OPTIONS.fontFamily,
   fontSize = DEFAULT_TERMINAL_OPTIONS.fontSize,
+  convertEol = DEFAULT_TERMINAL_OPTIONS.convertEol,
+  hasBackground = false,
   padding = DEFAULT_TERMINAL_PADDING,
   twoFaEnabled,
   disconnectMessage,
   onApiChange,
+  onLatencyChange,
+  onTitleChange,
 }: TerminalSessionProps) => {
   const hostRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef(active);
   const disconnectMessageRef = useRef(disconnectMessage);
   const onApiChangeRef = useRef(onApiChange);
+  const onLatencyChangeRef = useRef(onLatencyChange);
+  const onTitleChangeRef = useRef(onTitleChange);
+  const apiRef = useRef<TerminalSessionApi | null>(null);
+  const syncWebglRef = useRef<((shouldEnable: boolean) => void) | null>(null);
   const toastId = useId();
   const { t } = useTranslation();
+  const tRef = useRef(t);
 
   activeRef.current = active;
+  tRef.current = t;
 
   useEffect(() => {
     disconnectMessageRef.current = disconnectMessage;
@@ -66,11 +99,86 @@ const TerminalSession = ({
   }, [onApiChange]);
 
   useEffect(() => {
+    onLatencyChangeRef.current = onLatencyChange;
+  }, [onLatencyChange]);
+
+  useEffect(() => {
+    onTitleChangeRef.current = onTitleChange;
+  }, [onTitleChange]);
+
+  useEffect(() => {
+    const currentApi = apiRef.current;
+    if (!currentApi) {
+      return;
+    }
+    currentApi.terminal.options.fontFamily = fontFamily;
+    try {
+      currentApi.terminal.clearTextureAtlas();
+    } catch {
+      // 忽略渲染器尚未就绪的情况
+    }
+    currentApi.fit();
+    if (currentApi.terminal.rows > 0) {
+      currentApi.terminal.refresh(0, currentApi.terminal.rows - 1);
+    }
+  }, [fontFamily]);
+
+  useEffect(() => {
+    const currentApi = apiRef.current;
+    if (!currentApi) {
+      return;
+    }
+    currentApi.terminal.options.fontSize = fontSize;
+    try {
+      currentApi.terminal.clearTextureAtlas();
+    } catch {
+      // 忽略渲染器尚未就绪的情况
+    }
+    currentApi.fit();
+    if (currentApi.terminal.rows > 0) {
+      currentApi.terminal.refresh(0, currentApi.terminal.rows - 1);
+    }
+  }, [fontSize]);
+
+  useEffect(() => {
+    const currentApi = apiRef.current;
+    if (!currentApi) {
+      return;
+    }
+    currentApi.terminal.options.convertEol = convertEol;
+  }, [convertEol]);
+
+  useEffect(() => {
+    const currentApi = apiRef.current;
+    if (!currentApi) {
+      return;
+    }
+    currentApi.terminal.options.theme = {
+      ...currentApi.terminal.options.theme,
+      background: hasBackground ? "rgba(0, 0, 0, 0)" : "#000000",
+    };
+    try {
+      currentApi.terminal.clearTextureAtlas();
+    } catch {
+      // 忽略渲染器尚未就绪的情况
+    }
+    if (currentApi.terminal.rows > 0) {
+      currentApi.terminal.refresh(0, currentApi.terminal.rows - 1);
+    }
+  }, [hasBackground]);
+
+  // 仅当前可见标签占用 WebGL 上下文，后台标签切出时释放，避免多标签耗尽浏览器 WebGL 上下文上限
+  useEffect(() => {
+    syncWebglRef.current?.(active);
+  }, [active]);
+
+  useEffect(() => {
     if (!hostRef.current) {
       return;
     }
 
     const themeWithSelection = {
+      background: hasBackground ? "rgba(0, 0, 0, 0)" : "#000000",
       selectionBackground: "#ffffff",
       selectionForeground: "#000000",
       selectionInactiveBackground: "#ffffff",
@@ -81,7 +189,10 @@ const TerminalSession = ({
 
     const terminalOptions: Partial<ITerminalOptions> = {
       ...DEFAULT_TERMINAL_OPTIONS,
+      fontFamily,
       fontSize,
+      convertEol,
+      allowTransparency: true,
       cursorStyle: "bar",
       cursorInactiveStyle: "bar",
       cursorWidth: 2,
@@ -94,12 +205,14 @@ const TerminalSession = ({
     const fitAddon = new FitAddon();
     const searchAddon = new SearchAddon();
     const webLinksAddon = new WebLinksAddon();
+    const clipboardAddon = new ClipboardAddon();
     const host = hostRef.current;
     let disposed = false;
     let firstBinary = false;
     let firstBinaryTimeout: ReturnType<typeof setTimeout> | null = null;
     let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-    let requestID: string | null = null;
+    let requestID: string | null = initialRequestId ?? null;
+    const clientId = createClientId();
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -107,10 +220,25 @@ const TerminalSession = ({
     let otpBuffer = "";
     let awaitingOtp = false;
     let currentOtp: string | null = null;
+    const waitingToastId = `${toastId}-waiting`;
+    // 被控端附着前先在 toast 里提示“等待连接”，避免把提示写进终端缓冲。
+    let waitingTimer: ReturnType<typeof setTimeout> | null = null;
+    let waitingShown = false;
+    // 收到 terminate 后进入终态：不再重连，也不再响应任何后续事件。
+    let terminated = false;
+    let heartbeatSeq = 0;
+    const pendingHeartbeats = new Map<string, number>();
+    let webglCtor: (new () => WebglAddonType) | null = null;
+    let webglAddon: WebglAddonType | null = null;
+    let addonsReady = false;
+    let fitRaf: number | null = null;
+    let lastSentCols: number | null = null;
+    let lastSentRows: number | null = null;
 
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
     term.loadAddon(webLinksAddon);
+    term.loadAddon(clipboardAddon);
     term.open(host);
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -123,21 +251,121 @@ const TerminalSession = ({
       ws.send(typeof data === "string" ? encode(data) : data);
     };
 
-    const fit = () => {
-      if (disposed) {
+    const sendResize = (force = false) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (!force && lastSentCols === term.cols && lastSentRows === term.rows) {
+        return;
+      }
+      lastSentCols = term.cols;
+      lastSentRows = term.rows;
+      ws.send(
+        JSON.stringify({
+          type: "resize",
+          cols: term.cols,
+          rows: term.rows,
+        }),
+      );
+    };
+
+    const fit = (forceSend = false) => {
+      if (disposed || host.clientWidth <= 0 || host.clientHeight <= 0) {
         return;
       }
       fitAddon.fit();
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "resize",
-            cols: term.cols,
-            rows: term.rows,
-          }),
-        );
+      sendResize(forceSend);
+    };
+
+    // 将 ResizeObserver / window.resize 合并到单帧一次 rAF，避免拖拽分屏时高频重排与重复发帧
+    const scheduleFit = () => {
+      if (disposed || fitRaf !== null) {
+        return;
+      }
+      fitRaf = requestAnimationFrame(() => {
+        fitRaf = null;
+        fit();
+      });
+    };
+
+    const disposeWebgl = () => {
+      if (!webglAddon) return;
+      const current = webglAddon;
+      webglAddon = null;
+      try {
+        current.dispose();
+      } catch {
+        // 忽略已释放或上下文丢失后的清理异常
       }
     };
+
+    const syncWebgl = (shouldEnable: boolean) => {
+      if (disposed) return;
+      if (!shouldEnable) {
+        disposeWebgl();
+        return;
+      }
+      if (!addonsReady || !webglCtor || webglAddon) {
+        return;
+      }
+      try {
+        const addon = new webglCtor();
+        addon.onContextLoss(() => {
+          if (webglAddon === addon) {
+            webglAddon = null;
+          }
+          try {
+            addon.dispose();
+          } catch {
+            // 忽略上下文丢失后的清理异常
+          }
+        });
+        term.loadAddon(addon);
+        webglAddon = addon;
+        scheduleFit();
+        if (term.rows > 0) {
+          term.refresh(0, term.rows - 1);
+        }
+      } catch {
+        // WebGL2 不可用时自动回退到默认渲染器。
+      }
+    };
+    syncWebglRef.current = syncWebgl;
+
+    // 较重的增强插件（连字、WebGL 渲染、内联图像）在终端打开后异步加载，
+    // 显著减小终端首屏体积并加快首次连接；仍严格保持 LigaturesAddon -> WebglAddon 激活顺序。
+    void (async () => {
+      const [ligaturesRes, webglRes, imageRes] = await Promise.allSettled([
+        import("@xterm/addon-ligatures"),
+        import("@xterm/addon-webgl"),
+        import("@xterm/addon-image"),
+      ]);
+      if (disposed) return;
+
+      if (imageRes.status === "fulfilled") {
+        try {
+          term.loadAddon(new imageRes.value.ImageAddon());
+        } catch {
+          // 忽略图像插件初始化失败
+        }
+      }
+
+      if (ligaturesRes.status === "fulfilled") {
+        try {
+          term.loadAddon(new ligaturesRes.value.LigaturesAddon());
+        } catch {
+          // 忽略连字插件初始化失败，保持默认渲染。
+        }
+      }
+
+      if (disposed) return;
+
+      if (webglRes.status === "fulfilled") {
+        webglCtor = webglRes.value.WebglAddon;
+      }
+      addonsReady = true;
+      syncWebgl(activeRef.current);
+    })();
 
     const exportText = () => {
       const buffer = term.buffer.active;
@@ -170,31 +398,56 @@ const TerminalSession = ({
       }
     };
 
+    // 优先使用 Bracketed Paste Mode（由 xterm.paste 在终端开启 DECSET 2004 时自动包裹 \x1b[200~...\x1b[201~），
+    // 未开启时回退为常规换行规范化粘贴。
+    const pasteText = (rawText: string) => {
+      if (!rawText || disposed) {
+        return;
+      }
+      term.clearSelection();
+      term.focus();
+      const sanitized = sanitizeBracketedPaste(rawText);
+      if (!sanitized) {
+        return;
+      }
+      if (
+        term.modes.bracketedPasteMode &&
+        !term.options.ignoreBracketedPasteMode
+      ) {
+        term.paste(sanitized);
+        return;
+      }
+      term.paste(normalizePaste(sanitized));
+    };
+
     const pasteClipboard = async () => {
       try {
         const text = await navigator.clipboard.readText();
-        if (disposed) {
-          return;
-        }
-        term.clearSelection();
-        term.focus();
-        send(normalizePaste(text));
+        pasteText(text);
       } catch {
         // Clipboard permissions are reported by the existing HTTPS callout.
       }
     };
 
-    const promptOtpLine = "\r\n\x1b[1m" + t("terminal.2fa_prompt", "Two-factor authentication required.") + "\x1b[0m\r\n" + t("terminal.2fa_code_prompt", "Enter 2FA code: ");
+    const getPromptOtpLine = () =>
+      "\r\n\x1b[1m" +
+      tRef.current("terminal.2fa_prompt", "Two-factor authentication required.") +
+      "\x1b[0m\r\n" +
+      tRef.current("terminal.2fa_code_prompt", "Enter 2FA code: ");
 
     const startOtpPrompt = (isRetry: boolean) => {
       awaitingOtp = true;
       otpBuffer = "";
       if (isRetry) {
-        term.write("\r\n\x1b[31m" + t("terminal.otp_invalid", "Invalid or expired 2FA code.") + "\x1b[0m");
+        term.write(
+          "\r\n\x1b[31m" +
+            tRef.current("terminal.otp_invalid", "Invalid or expired 2FA code.") +
+            "\x1b[0m",
+        );
       } else {
         term.clear();
       }
-      term.write(promptOtpLine);
+      term.write(getPromptOtpLine());
       term.focus();
     };
 
@@ -233,14 +486,26 @@ const TerminalSession = ({
             } else {
               otpBuffer = "";
               term.write("^C\r\n");
-              term.write(t("terminal.2fa_code_prompt", "Enter 2FA code: "));
+              term.write(
+                tRef.current("terminal.2fa_code_prompt", "Enter 2FA code: "),
+              );
             }
           }
           return false;
         }
         if (key === "v") {
-          event.preventDefault();
-          void pasteClipboard();
+          // Ctrl+V 不阻止默认事件，交由浏览器原生 paste 事件触发统一粘贴逻辑（无需剪贴板读取权限弹窗）；
+          // Ctrl+Alt+V 或在支持 Clipboard API 时的 Ctrl+Shift+V 主动读取剪贴板粘贴。
+          if (ctrlOnly) {
+            return false;
+          }
+          if (
+            ctrlAlt ||
+            typeof navigator.clipboard?.readText === "function"
+          ) {
+            event.preventDefault();
+            void pasteClipboard();
+          }
           return false;
         }
       }
@@ -260,6 +525,17 @@ const TerminalSession = ({
       return true;
     });
 
+    const handlePaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text/plain");
+      if (text === undefined) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      pasteText(text);
+    };
+    host.addEventListener("paste", handlePaste, true);
+
     const handleContextMenu = (event: MouseEvent) => {
       event.preventDefault();
       if (term.hasSelection()) {
@@ -270,25 +546,35 @@ const TerminalSession = ({
     };
     host.addEventListener("contextmenu", handleContextMenu);
 
-    const resizeObserver = new ResizeObserver(fit);
+    const resizeObserver = new ResizeObserver(scheduleFit);
     resizeObserver.observe(host);
-    const handleWindowResize = () => fit();
-    window.addEventListener("resize", handleWindowResize);
+    window.addEventListener("resize", scheduleFit);
+
+    const clearLatency = () => {
+      pendingHeartbeats.clear();
+      onLatencyChangeRef.current?.(null);
+    };
+
+    const sendHeartbeat = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const id = String(++heartbeatSeq);
+      if (pendingHeartbeats.size >= 8) {
+        const oldest = pendingHeartbeats.keys().next().value;
+        if (oldest !== undefined) {
+          pendingHeartbeats.delete(oldest);
+        }
+      }
+      pendingHeartbeats.set(id, performance.now());
+      ws.send(JSON.stringify({ type: "heartbeat", id }));
+    };
 
     const startHeartbeat = () => {
       if (heartbeatInterval !== null) {
         clearInterval(heartbeatInterval);
       }
-      heartbeatInterval = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: "heartbeat",
-              timestamp: new Date().toISOString(),
-            }),
-          );
-        }
-      }, 10000);
+      heartbeatInterval = setInterval(sendHeartbeat, 10000);
     };
 
     const stopHeartbeat = () => {
@@ -302,6 +588,43 @@ const TerminalSession = ({
       toast.dismiss(toastId);
     };
 
+    const hideWaitingToast = () => {
+      // 输出流里每帧都会调用这里，没显示过就什么都不做，避免高频 dismiss。
+      if (waitingTimer === null && !waitingShown) {
+        return;
+      }
+      if (waitingTimer !== null) {
+        clearTimeout(waitingTimer);
+        waitingTimer = null;
+      }
+      waitingShown = false;
+      toast.dismiss(waitingToastId);
+    };
+
+    // 等待被控端时显示常驻 toast：连接建立后才出现（无竞态地响应后端状态帧），
+    // 被控端就位后由 ready 或首帧输出关闭。重连时同样生效。
+    const showWaitingToast = () => {
+      if (waitingTimer !== null || waitingShown) {
+        return;
+      }
+      waitingTimer = setTimeout(() => {
+        waitingTimer = null;
+        if (disposed) {
+          return;
+        }
+        waitingShown = true;
+        toast.loading(
+          tRef.current("terminal.waiting_agent", "等待被控端连接..."),
+          {
+            duration: Infinity,
+            id: waitingToastId,
+            // 被控端久不上线时允许手动关掉，不必等它连上。
+            closeButton: true,
+          },
+        );
+      }, WAITING_HINT_DELAY);
+    };
+
     const connect = (otp: string | null) => {
       const params = new URLSearchParams();
       // 2FA is required only for the initial session creation. Reattach is
@@ -313,6 +636,7 @@ const TerminalSession = ({
       if (requestID) {
         params.set("request_id", requestID);
       }
+      params.set("client_id", clientId);
       const query = params.toString();
       const socket = new WebSocket(
         `${baseUrl}/api/admin/client/${uuid}/terminal${query ? `?${query}` : ""}`,
@@ -333,7 +657,12 @@ const TerminalSession = ({
           stableConnectionTimer = null;
         }, 10000);
         hideReconnectingToast();
-        fit();
+        // 后端只在被控端真正附着后才发状态帧，所以这里先显示等待提示；
+        // 被控端已在位的会话会在 attach 时立刻收到 ready。
+        showWaitingToast();
+        lastSentCols = null;
+        lastSentRows = null;
+        fit(true);
         startHeartbeat();
       };
 
@@ -342,21 +671,58 @@ const TerminalSession = ({
           return;
         }
         if (typeof event.data === "string") {
+          // 文本帧 = 控制消息，二进制帧 = 终端内容（见服务端 terminal/control.go）。
           try {
             const control = JSON.parse(event.data);
-            if (
-              control &&
-              typeof control === "object" &&
-              typeof control.request_id === "string"
-            ) {
-              requestID = control.request_id;
-              return;
+            if (control && typeof control === "object" && control.type) {
+              switch (control.type) {
+                case "assigned":
+                  // 会话已建立，记住 request_id；此后任何一侧掉线都能用它重连。
+                  if (typeof control.request_id === "string") {
+                    requestID = control.request_id;
+                  }
+                  return;
+                case "ready":
+                  // 被控端就位，转发开始。
+                  hideWaitingToast();
+                  sendHeartbeat();
+                  return;
+                case "heartbeat":
+                  if (typeof control.id === "string") {
+                    const sentAt = pendingHeartbeats.get(control.id);
+                    if (sentAt !== undefined) {
+                      pendingHeartbeats.delete(control.id);
+                      onLatencyChangeRef.current?.(
+                        Math.max(1, Math.round(performance.now() - sentAt)),
+                      );
+                    }
+                  }
+                  return;
+                case "abort":
+                  // 对端意外掉线：会话仍保留，稍后重连即可恢复。
+                  clearLatency();
+                  showWaitingToast();
+                  return;
+                case "terminate":
+                  // 终态：不再重连。
+                  terminated = true;
+                  clearLatency();
+                  hideWaitingToast();
+                  hideReconnectingToast();
+                  term.write(`\n ${disconnectMessageRef.current}`);
+                  return;
+                default:
+                  // 未知控制消息：忽略，绝不写进终端。前向兼容靠这一条。
+                  return;
+              }
             }
           } catch {
-            // Plain text is terminal output from the server.
+            // 不是合法的控制消息，按终端输出处理，交给下面写入 xterm。
           }
         }
         if (event.data instanceof ArrayBuffer) {
+          // 有任何输出就说明被控端已附着。
+          hideWaitingToast();
           if (!firstBinary) {
             firstBinary = true;
             // Clear screen when first agent binary packet arrives
@@ -367,7 +733,7 @@ const TerminalSession = ({
                 return;
               }
               term.resize(Math.max(1, term.cols - 1), term.rows);
-              fit();
+              fit(true);
             }, 200);
           } else {
             term.write(new Uint8Array(event.data));
@@ -381,6 +747,9 @@ const TerminalSession = ({
         if (ws !== socket) return;
         ws = null;
         stopHeartbeat();
+        clearLatency();
+        // 等待提示只在“已连上但还没等到被控端”时有效，断线后交给重连流程重新给出。
+        hideWaitingToast();
         if (stableConnectionTimer !== null) {
           clearTimeout(stableConnectionTimer);
           stableConnectionTimer = null;
@@ -388,13 +757,13 @@ const TerminalSession = ({
         if (disposed) {
           return;
         }
-        if (!requestID) {
-          if (twoFaEnabled) {
-            hideReconnectingToast();
-            startOtpPrompt(true);
-          } else {
-            scheduleReconnect();
-          }
+        // terminate 已经处理过（会写断开提示并停止重连），这里不重复。
+        if (terminated) {
+          return;
+        }
+        if (!requestID && twoFaEnabled) {
+          hideReconnectingToast();
+          startOtpPrompt(true);
           return;
         }
         scheduleReconnect();
@@ -410,12 +779,13 @@ const TerminalSession = ({
       }
       if (now >= reconnectDeadline) {
         hideReconnectingToast();
+        hideWaitingToast();
         term.write(`\n ${disconnectMessageRef.current}`);
         return;
       }
       if (reconnectTimer !== null) return;
       toast.loading(
-        t("terminal.reconnecting", "连接已断开，正在尝试重新连接"),
+        tRef.current("terminal.reconnecting", "连接已断开，正在尝试重新连接"),
         {
           duration: Infinity,
           id: toastId,
@@ -430,30 +800,38 @@ const TerminalSession = ({
       }, RECONNECT_INTERVAL);
     };
 
-    if (twoFaEnabled) {
+    if (twoFaEnabled && !requestID) {
       startOtpPrompt(false);
     } else {
       connect(null);
     }
 
+    const termTitleDisposable = term.onTitleChange((title) => {
+      onTitleChangeRef.current?.(title);
+    });
+
     const termDataDisposable = term.onData((data) => {
       if (awaitingOtp) {
-        if (data === "\r") {
-          awaitingOtp = false;
-          term.write("\r\n");
-          if (!otpBuffer) {
-            startOtpPrompt(false);
+        const cleaned = sanitizeBracketedPaste(data);
+        for (const ch of cleaned) {
+          if (ch === "\r" || ch === "\n") {
+            awaitingOtp = false;
+            term.write("\r\n");
+            if (!otpBuffer) {
+              startOtpPrompt(false);
+              return;
+            }
+            currentOtp = otpBuffer;
+            otpBuffer = "";
+            connect(currentOtp);
             return;
+          } else if (ch === "\x7f" || ch === "\b") {
+            if (otpBuffer.length > 0) {
+              otpBuffer = otpBuffer.slice(0, -1);
+            }
+          } else if (ch >= " " && ch <= "~") {
+            otpBuffer += ch;
           }
-          currentOtp = otpBuffer;
-          otpBuffer = "";
-          connect(currentOtp);
-        } else if (data === "\x7f" || data === "\b") {
-          if (otpBuffer.length > 0) {
-            otpBuffer = otpBuffer.slice(0, -1);
-          }
-        } else if (data.length === 1 && data >= " " && data <= "~") {
-          otpBuffer += data;
         }
         return;
       }
@@ -463,11 +841,15 @@ const TerminalSession = ({
       terminal: term,
       searchAddon,
       send,
-      fit,
+      fit: () => fit(false),
       exportText,
     };
+    apiRef.current = api;
     onApiChangeRef.current(api);
-    requestAnimationFrame(() => {
+    const initialFitRaf = requestAnimationFrame(() => {
+      if (disposed) {
+        return;
+      }
       fit();
       if (activeRef.current) {
         term.focus();
@@ -476,15 +858,26 @@ const TerminalSession = ({
 
     return () => {
       disposed = true;
+      cancelAnimationFrame(initialFitRaf);
+      if (fitRaf !== null) {
+        cancelAnimationFrame(fitRaf);
+        fitRaf = null;
+      }
+      syncWebglRef.current = null;
+      disposeWebgl();
+      apiRef.current = null;
       onApiChangeRef.current(null);
+      host.removeEventListener("paste", handlePaste, true);
       host.removeEventListener("contextmenu", handleContextMenu);
       resizeObserver.disconnect();
-      window.removeEventListener("resize", handleWindowResize);
+      window.removeEventListener("resize", scheduleFit);
+      termTitleDisposable.dispose();
       termDataDisposable.dispose();
       if (firstBinaryTimeout !== null) {
         clearTimeout(firstBinaryTimeout);
       }
       stopHeartbeat();
+      clearLatency();
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer);
       }
@@ -492,6 +885,7 @@ const TerminalSession = ({
         clearTimeout(stableConnectionTimer);
       }
       hideReconnectingToast();
+      hideWaitingToast();
       if (ws) {
         const socket = ws;
         ws = null;
@@ -499,8 +893,9 @@ const TerminalSession = ({
         socket.onmessage = null;
         socket.onclose = null;
         socket.onerror = null;
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "close", request_id: requestID }));
+        if (socket.readyState === WebSocket.OPEN && !terminated) {
+          // 用户主动关标签 = 正常终止：明确告知，双方都不再重连。
+          socket.send(JSON.stringify({ type: "terminate" }));
         }
         if (
           socket.readyState === WebSocket.OPEN ||
@@ -511,15 +906,20 @@ const TerminalSession = ({
       }
       term.dispose();
     };
-  }, [fontSize, twoFaEnabled, toastId, t, uuid]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [twoFaEnabled, toastId, uuid, initialRequestId]);
 
   const style = {
     "--xterm-padding": `${padding}px`,
+    "--xterm-container-bg": hasBackground ? "transparent" : "#000000",
+    "--xterm-scrollbar-track": hasBackground ? "transparent" : "#000000",
   } as CSSProperties;
 
   return (
     <div
-      className={`km-terminal-session terminal-page terminal-xterm-host absolute inset-0 h-full w-full overflow-hidden box-border bg-[var(--xterm-container-bg,#000)] p-[var(--xterm-padding,16px)] transition-opacity duration-150 [&_.xterm-viewport]:[scrollbar-width:thin] [&_.xterm-viewport]:[scrollbar-color:var(--xterm-scrollbar-thumb,#555)_var(--xterm-scrollbar-track,#000000)] [&_.xterm-viewport::-webkit-scrollbar]:h-2.5 [&_.xterm-viewport]:[scrollbar-width:thin] [&_.xterm-viewport::-webkit-scrollbar]:w-2.5 [&_.xterm-viewport::-webkit-scrollbar-track]:bg-[var(--xterm-scrollbar-track,#000000)] [&_.xterm-viewport::-webkit-scrollbar-thumb]:rounded-[5px] [&_.xterm-viewport::-webkit-scrollbar-thumb]:bg-[var(--xterm-scrollbar-thumb,#555)] [&_.xterm-viewport::-webkit-scrollbar-thumb:hover]:bg-[var(--xterm-scrollbar-thumb-hover,#777)] ${
+      className={`km-terminal-session terminal-page terminal-xterm-host absolute inset-0 h-full w-full overflow-hidden box-border bg-[var(--xterm-container-bg,#000)] p-[var(--xterm-padding,16px)] transition-opacity duration-[var(--km-dur-fast)] ease-[var(--km-ease-standard)] [&_.xterm-viewport]:[scrollbar-width:thin] [&_.xterm-viewport]:[scrollbar-color:var(--xterm-scrollbar-thumb,#555)_var(--xterm-scrollbar-track,#000000)] [&_.xterm-viewport::-webkit-scrollbar]:h-2.5 [&_.xterm-viewport]:[scrollbar-width:thin] [&_.xterm-viewport::-webkit-scrollbar]:w-2.5 [&_.xterm-viewport::-webkit-scrollbar-track]:bg-[var(--xterm-scrollbar-track,#000000)] [&_.xterm-viewport::-webkit-scrollbar-thumb]:rounded-[5px] [&_.xterm-viewport::-webkit-scrollbar-thumb]:bg-[var(--xterm-scrollbar-thumb,#555)] [&_.xterm-viewport::-webkit-scrollbar-thumb:hover]:bg-[var(--xterm-scrollbar-thumb-hover,#777)] ${
+        hasBackground ? "[&_.xterm-viewport]:!bg-transparent " : ""
+      }${
         active
           ? "is-active z-[1] visible pointer-events-auto opacity-100"
           : "invisible pointer-events-none opacity-0"
@@ -535,4 +935,4 @@ const TerminalSession = ({
   );
 };
 
-export default TerminalSession;
+export default memo(TerminalSession);

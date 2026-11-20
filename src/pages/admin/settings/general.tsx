@@ -1,49 +1,71 @@
 import { useTranslation } from "react-i18next";
 import { Button, Code, Flex, Text, TextField } from "@radix-ui/themes";
-import {
-  updateSettingsWithToast,
-  useSettings,
-  type SettingsResponse,
-} from "@/lib/api";
+import { api } from "@/lib/http";
 import {
   SettingCardButton,
   SettingCardCollapse,
   SettingCardLabel,
   SettingCardSelect,
-  SettingCardShortTextInput,
+  SettingCardsLoading,
   SettingCardSwitch,
 } from "@/components/admin/SettingCard";
 import React from "react";
 import { toast } from "sonner";
-import Loading from "@/components/loading";
+import { useRouteQuery } from "@/lib/routeData";
+import { DEFAULT_SETTINGS, settingsErrorText, settingsQuery } from "@/routeQueries/settings";
+import { AnimatePresence, motion } from "motion/react";
+import { MOTION_VARIANTS } from "@/lib/motion";
+import { ApiKeyCard } from "./shared/ApiKeyCard";
+import { getJsonBody, saveSettings, serverError } from "./shared/request";
 
 export default function GeneralSettings() {
   const { t } = useTranslation();
-  const { settings, loading, error } = useSettings();
+  // 页面切换时设置已由 routePreload 提前请求；等待预算内到达直接显示，否则设置卡显示色块
+  const settingsResult = useRouteQuery(settingsQuery);
+  const settings = settingsResult.data ?? DEFAULT_SETTINGS;
+  const loading = settingsResult.loading;
+  const error = settingsErrorText(settingsResult.error);
   const [geoip_testResult, setGeoipTestResult] = React.useState<string | null>(
     null
   );
-  if (loading) {
-    return <Loading />;
-  }
-
   if (error) {
     return <Text color="red">{error}</Text>;
   }
 
   return (
-    <>
+    // 布局与 settings/_layout 的内层一致（flex-column + block 档）；加载中每张设置卡各自显示色块
+    <div className="flex w-full flex-col gap-km-block">
+      <SettingCardsLoading loading={loading}>
       <SettingCardLabel>
         {t("settings.general.auto_discovery")}
       </SettingCardLabel>
-      <ApiCard settings={settings} />
-      <label className="text-xl font-bold">{t("settings.geoip.title")}</label>
+      <ApiKeyCard
+        settingKey="auto_discovery_key"
+        savedValue={settings?.auto_discovery_key}
+        title={t("settings.general.auto_discovery_key")}
+        description={t("settings.general.auto_discovery_key_description")}
+        length={24}
+      >
+        <Button
+          variant="soft"
+          color="mint"
+          onClick={() => {
+            window.open(
+              "https://komari-document.pages.dev/install/agent-ad.html",
+              "_blank"
+            );
+          }}
+        >
+          {t("common.help")}
+        </Button>
+      </ApiKeyCard>
+      <SettingCardLabel>{t("settings.geoip.title")}</SettingCardLabel>
       <SettingCardSwitch
         title={t("settings.geoip.enable_title")}
         description={t("settings.geoip.enable_description")}
         defaultChecked={settings.geo_ip_enabled}
         onChange={async (checked) => {
-          await updateSettingsWithToast({ geo_ip_enabled: checked }, t);
+          await saveSettings({ geo_ip_enabled: checked }, t);
         }}
         className="km-page-admin-settings-general km-setting-card"
       />
@@ -59,22 +81,19 @@ export default function GeneralSettings() {
           { value: "ipinfo", label: "ipinfo.io" },
         ]}
         OnSave={async (value) => {
-          await updateSettingsWithToast({ geo_ip_provider: value }, t);
+          await saveSettings({ geo_ip_provider: value }, t);
         }}
       />
       <SettingCardButton
         title={t("settings.geoip.update_title")}
         onClick={async () => {
-          const result = await fetch("/api/admin/update/mmdb", {
-            method: "POST",
-          });
-          const data = await result.json();
-          if (data.status === "success") {
+          try {
+            await api.post("/api/admin/update/mmdb");
             toast.success(t("settings.geoip.update_success"));
-          } else {
-            toast.error(
-              data.message || t("settings.geoip.update_error")
-            );
+          } catch (error) {
+            const failure = serverError(error);
+            if (!failure) throw error;
+            toast.error(failure.message || t("settings.geoip.update_error"));
           }
         }}
         className="km-setting-card"
@@ -96,8 +115,7 @@ export default function GeneralSettings() {
                     "input[placeholder]"
                   ) as HTMLInputElement
                 ).value;
-                const result = await fetch(`/api/admin/test/geoip?ip=${ip}`);
-                const data = await result.json();
+                const data = await getJsonBody<any>(`/api/admin/test/geoip?ip=${ip}`);
                 setGeoipTestResult(
                   JSON.stringify(data.data, null, 2) || t("common.no_results")
                 );
@@ -107,88 +125,33 @@ export default function GeneralSettings() {
             </Button>
           </div>{" "}
           <Flex className="w-full">
-            {geoip_testResult && (
-              <Code
-                className="w-full whitespace-pre-wrap text-sm p-3 rounded-md overflow-auto max-h-96"
-                style={{ display: "block" }}
-              >
-                {geoip_testResult}
-              </Code>
-            )}
+            {/*
+              feedback 性格：测试结果出现/消失时高度弹簧展开（MOTION_VARIANTS.collapse），
+              下方内容被平滑推开；外层 SettingCardCollapse 的 AutoHeight 跟随卡片总高度。
+            */}
+            <AnimatePresence initial={false}>
+              {geoip_testResult && (
+                <motion.div
+                  key="geoip-result"
+                  className="w-full"
+                  variants={MOTION_VARIANTS.collapse}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                >
+                  <Code
+                    className="w-full whitespace-pre-wrap text-sm p-3 rounded-md overflow-auto max-h-96"
+                    style={{ display: "block" }}
+                  >
+                    {geoip_testResult}
+                  </Code>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </Flex>
         </Flex>
       </SettingCardCollapse>
-    </>
+      </SettingCardsLoading>
+    </div>
   );
 }
-
-const ApiCard = ({ settings }: { settings: SettingsResponse }) => {
-
-  //const { settings } = useSettings();
-  const { t } = useTranslation();
-  const [apiValues, setApiValues] = React.useState<string>(
-    settings?.auto_discovery_key || ""
-  );
-
-  // 生成32位随机字符串
-  const generateRandomString = () => {
-    const chars =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let result = "";
-    for (let i = 0; i < 24; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-  };
-
-  // 处理生成按钮点击
-  const handleGenerateApiKey = () => {
-    const newApiKey = generateRandomString();
-    setApiValues(newApiKey);
-  };
-
-  // 初始化API值
-  React.useEffect(() => {
-    if (settings?.auto_discovery_key) {
-      setApiValues(settings.auto_discovery_key);
-    }
-  }, [settings?.auto_discovery_key]);
-
-  return (
-    <SettingCardShortTextInput
-      title={t("settings.general.auto_discovery_key")}
-      description={t("settings.general.auto_discovery_key_description")}
-      value={apiValues}
-      onChange={(e) => setApiValues(e.target.value)}
-      OnSave={async (values) => {
-        if (!values) {
-          await updateSettingsWithToast({ auto_discovery_key: "" }, t);
-          return;
-        }
-        if (values.length < 12) {
-          toast.error(t("settings.api.key_length_error"));
-          return;
-        }
-        await updateSettingsWithToast({ auto_discovery_key: values }, t);
-      }}
-    >
-      <div className="flex flex-row gap-2 justify-start items-center">
-        <Button variant="soft" color="green" onClick={handleGenerateApiKey}>
-          {t("common.generate")}
-        </Button>
-        <Button
-          variant="soft"
-          color="mint"
-          onClick={() => {
-            window.open(
-              "https://komari-document.pages.dev/install/agent-ad.html",
-              "_blank"
-            );
-          }}
-        >
-          {t("common.help")}
-        </Button>
-      </div>
-    </SettingCardShortTextInput>
-  );
-};

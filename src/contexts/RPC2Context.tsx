@@ -26,19 +26,28 @@ interface RPC2ContextType {
 }
 
 const RPC2Context = createContext<RPC2ContextType | undefined>(undefined);
+// 稳定的客户端实例 Context：连接状态抖动时，只调用 RPC 方法的消费者不会整树重渲染
+const RPC2ClientContext = createContext<RPC2Client | undefined>(undefined);
 
 // 模块级单例，避免在开发环境 StrictMode 或路由切换时产生多个连接
 let __rpc2_singleton__: RPC2Client | null = null;
 let __rpc2_refcount = 0;
 
+/**
+ * 取得（必要时创建）全局唯一的 RPC2 客户端。
+ * 给组件之外的代码用（例如 src/routeQueries 里的页面数据预取）：与 RPC2Provider 是同一个实例，
+ * 不会多建连接。组件内请继续使用 useRPC2Call。
+ */
+export const getRPC2Client = (): RPC2Client => {
+  if (!__rpc2_singleton__) {
+    __rpc2_singleton__ = new RPC2Client("/api/rpc2", { autoConnect: true });
+  }
+  return __rpc2_singleton__;
+};
+
 export const RPC2Provider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // 创建/复用客户端实例，默认启用自动连接
-  const [client] = useState(() => {
-    if (!__rpc2_singleton__) {
-      __rpc2_singleton__ = new RPC2Client("/api/rpc2", { autoConnect: true });
-    }
-    return __rpc2_singleton__;
-  });
+  const [client] = useState(getRPC2Client);
   const [connectionState, setConnectionState] = useState(client.state);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,9 +153,11 @@ export const RPC2Provider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 
   return (
-    <RPC2Context.Provider value={contextValue}>
-      {children}
-    </RPC2Context.Provider>
+    <RPC2ClientContext.Provider value={client}>
+      <RPC2Context.Provider value={contextValue}>
+        {children}
+      </RPC2Context.Provider>
+    </RPC2ClientContext.Provider>
   );
 };
 
@@ -158,9 +169,12 @@ export const useRPC2 = (): RPC2ContextType => {
   return context;
 };
 
-// 自定义 Hook 用于调用 RPC 方法
+// 自定义 Hook 用于调用 RPC 方法（订阅稳定 client，不因连接状态切换触发重渲染）
 export const useRPC2Call = () => {
-  const { client, isConnected } = useRPC2();
+  const client = useContext(RPC2ClientContext);
+  if (client === undefined) {
+    throw new Error(i18n.t("rpc2.provider_required"));
+  }
 
   // 保持稳定引用，避免消费者重复触发副作用
   const call = useCallback(<TParams = any, TResult = any>(
@@ -184,11 +198,16 @@ export const useRPC2Call = () => {
   const batchCall = useCallback((requests: Array<{ method: string; params?: any; notification?: boolean }>) =>
     client.batchCall(requests), [client]);
 
-  return {
-    call,
-    callViaWebSocket,
-    callViaHTTP,
-    batchCall,
-    isConnected,
-  };
+  return useMemo(
+    () => ({
+      call,
+      callViaWebSocket,
+      callViaHTTP,
+      batchCall,
+      get isConnected() {
+        return client.state === "connected";
+      },
+    }),
+    [batchCall, call, callViaHTTP, callViaWebSocket, client],
+  );
 }
