@@ -43,7 +43,9 @@ import {
   fileDownloadUrl,
   copyTextToClipboard,
   formatClipboardPath,
+  getClipboardUploadFiles,
   getDroppedUploadFiles,
+  isEditableEventTarget,
   joinRemotePath,
   normalizeRemotePath,
   remoteAncestors,
@@ -53,6 +55,7 @@ import {
   type RemoteFileInfo,
 } from "./fileManagerApi";
 import { useRemoteFileUpload } from "./useRemoteFileUpload";
+import { useMarqueeSelection } from "./useMarqueeSelection";
 import TerminalDialog from "./TerminalDialog";
 import TerminalUploadProgress from "./TerminalUploadProgress";
 
@@ -157,7 +160,6 @@ export const RemoteFileTree = ({
   const lastSelectedPathRef = useRef<string | null>(null);
   const internalDragPathsRef = useRef<string[] | null>(null);
   const [clipboardSource, setClipboardSource] = useState<ClipboardState>(null);
-  const [marqueeRange, setMarqueeRange] = useState<{ top: number; bottom: number } | null>(null);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [internalDrag, setInternalDrag] = useState<string[] | null>(null);
   const [action, setAction] = useState<TreeAction | null>(null);
@@ -169,12 +171,11 @@ export const RemoteFileTree = ({
   const [ownerValue, setOwnerValue] = useState("");
   const [groupValue, setGroupValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const treePanelRef = useRef<HTMLDivElement | null>(null);
+  const isHoveredRef = useRef(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetRef = useRef(rootPath);
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
-  const marqueeStartRef = useRef<number | null>(null);
-  const marqueeActiveRef = useRef(false);
-  const justMarqueeSelectedRef = useRef(false);
   const { contextMenuPosition, contextMenuOpen, openContextMenu, closeContextMenu } = useContextMenu();
 
   const loadDirectory = useCallback(
@@ -245,50 +246,31 @@ export const RemoteFileTree = ({
     lastSelectedPathRef.current = file.path;
   }, []);
 
-  const updateMarqueeSelection = useCallback((clientY: number) => {
-    const container = treeScrollRef.current;
-    if (!container || marqueeStartRef.current === null) return;
-    if (Math.abs(clientY - (marqueeStartRef.current + container.getBoundingClientRect().top - container.scrollTop)) < 3) return;
-    marqueeActiveRef.current = true;
-    const rect = container.getBoundingClientRect();
-    const currentY = clientY - rect.top + container.scrollTop;
-    const startY = marqueeStartRef.current;
-    const next = new Set<string>();
-    container.querySelectorAll<HTMLElement>("[data-tree-path]").forEach((element) => {
-      const rowRect = element.getBoundingClientRect();
-      const rowTop = rowRect.top - rect.top + container.scrollTop;
-      const rowBottom = rowTop + rowRect.height;
-      if (rowBottom >= Math.min(startY, currentY) && rowTop <= Math.max(startY, currentY)) {
-        const path = element.dataset.treePath;
-        if (path && path !== rootPath) next.add(path);
-      }
-    });
-    selectedPathsRef.current = next;
-    setSelectedPath(next.size ? String(next.values().next().value) : null);
-    setMarqueeRange({ top: Math.min(startY, currentY), bottom: Math.max(startY, currentY) });
-  }, [rootPath]);
-
-  const startMarqueeSelection = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest("[data-tree-path],[data-tree-spacer]")) return;
-    const container = treeScrollRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    marqueeStartRef.current = event.clientY - rect.top + container.scrollTop;
-    marqueeActiveRef.current = false;
-    justMarqueeSelectedRef.current = false;
-    setMarqueeRange(null);
-    const handleMove = (moveEvent: MouseEvent) => updateMarqueeSelection(moveEvent.clientY);
-    const handleUp = () => {
-      justMarqueeSelectedRef.current = marqueeActiveRef.current;
-      marqueeStartRef.current = null;
-      marqueeActiveRef.current = false;
-      setMarqueeRange(null);
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-    };
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-  }, [updateMarqueeSelection]);
+  const normalizedRootPath = normalizeRemotePath(rootPath);
+  const {
+    marqueeRect,
+    marqueeActiveRef,
+    marqueeTrackingRef,
+    startMarqueeSelection,
+    consumeJustMarqueeSelected,
+  } = useMarqueeSelection({
+    containerRef: treeScrollRef,
+    itemSelector: "[data-tree-path]",
+    ignoreSelector: "[data-tree-path],[data-tree-spacer],input,textarea,select",
+    getItemKey: (element) => {
+      const path = element.dataset.treePath;
+      if (!path || path === rootPath || path === normalizedRootPath) return null;
+      return path;
+    },
+    getSelectedPaths: () => selectedPathsRef.current,
+    onDragStart: closeContextMenu,
+    onSelectionChange: (next) => {
+      selectedPathsRef.current = next;
+      const firstPath = next.size ? String(next.values().next().value) : null;
+      setSelectedPath(firstPath);
+      lastSelectedPathRef.current = firstPath;
+    },
+  });
 
   const handleSelect = useCallback((file: RemoteFileInfo, event: ReactMouseEvent<HTMLElement>) => {
     const orderedPaths = Array.from(treeScrollRef.current?.querySelectorAll<HTMLElement>("[data-tree-path]") ?? [])
@@ -708,6 +690,70 @@ export const RemoteFileTree = ({
     setRenameValue("");
   }, []);
 
+  // 在编辑器左侧远程文件树区域使用 Ctrl/Cmd+V 粘贴剪贴板文件或图像，上传到所选目录（或根目录）
+  useEffect(() => {
+    if (!uuid || !rootPath || action !== null) return;
+    const handlePaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      const panel = treePanelRef.current;
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+
+      const activeEl = document.activeElement;
+      if (isEditableEventTarget(event.target) || isEditableEventTarget(activeEl)) return;
+
+      const focusedInside = Boolean(activeEl && panel.contains(activeEl));
+      const bodyFocused =
+        !activeEl || activeEl === document.body || activeEl === document.documentElement;
+      if (!focusedInside && !(isHoveredRef.current && bodyFocused)) return;
+
+      let targetDir = rootPath;
+      if (selectedPathsRef.current.size === 1) {
+        const onlyPath = String(selectedPathsRef.current.values().next().value);
+        const selectedEntry = findTreeFile(rootPath, onlyPath, childrenRef.current);
+        if (selectedEntry) {
+          targetDir = selectedEntry.is_dir ? selectedEntry.path : remoteDirname(selectedEntry.path);
+        }
+      }
+
+      const existingNames = new Set((childrenRef.current[targetDir] ?? []).map((item) => item.name));
+      const pastedFiles = getClipboardUploadFiles(event.clipboardData, existingNames);
+      if (pastedFiles.length > 0) {
+        event.preventDefault();
+        closeContextMenu();
+        if (targetDir !== rootPath) {
+          setExpanded((current) => new Set(current).add(targetDir));
+        }
+        if (pastedFiles.length === 1) {
+          toast.info(
+            t("file_manager.paste_uploading", {
+              name: pastedFiles[0].name,
+              defaultValue: `Uploading ${pastedFiles[0].name}`,
+            }),
+          );
+        } else {
+          toast.info(
+            t("file_manager.paste_uploading_multiple", {
+              count: pastedFiles.length,
+              defaultValue: `Uploading ${pastedFiles.length} pasted files`,
+            }),
+          );
+        }
+        void uploadFiles(pastedFiles, targetDir);
+        return;
+      }
+
+      if (clipboardSource) {
+        event.preventDefault();
+        closeContextMenu();
+        void pasteInto(targetDir);
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [action, clipboardSource, closeContextMenu, pasteInto, rootPath, t, uploadFiles, uuid]);
+
   const renderNode = (file: RemoteFileInfo, depth: number, ancestors = new Set<string>()) => {
     const normalizedPath = normalizeRemotePath(file.path);
     const isExpanded = expanded.has(normalizedPath);
@@ -745,7 +791,7 @@ export const RemoteFileTree = ({
         <PressableButton
           type="button"
           data-tree-path={normalizedPath}
-          draggable={!marqueeActiveRef.current && marqueeRange === null && renamingPath !== file.path}
+          draggable={!marqueeActiveRef.current && marqueeRect === null && renamingPath !== file.path}
           tapScale={0.985}
           className={`my-0.5 flex h-6 w-full items-center gap-1 rounded-[4px] border-0 pr-1 text-left text-xs transition-colors ${
             activePath === file.path
@@ -760,7 +806,7 @@ export const RemoteFileTree = ({
           }`}
           style={{ paddingLeft: `${Math.max(4, depth * 12 + 4)}px`, transformOrigin: "left center" }}
           onDragStart={(event) => {
-            if (marqueeStartRef.current !== null) {
+            if (marqueeTrackingRef.current) {
               event.preventDefault();
               return;
             }
@@ -932,7 +978,15 @@ export const RemoteFileTree = ({
 
   return (
     <div
-      className="relative flex h-full min-h-0 flex-col"
+      ref={treePanelRef}
+      className="relative flex h-full min-h-0 flex-col outline-none"
+      onMouseEnter={() => { isHoveredRef.current = true; }}
+      onMouseLeave={() => { isHoveredRef.current = false; }}
+      onMouseDown={(event) => {
+        if (!isEditableEventTarget(event.target)) {
+          treePanelRef.current?.focus({ preventScroll: true });
+        }
+      }}
       onClick={closeContextMenu}
       tabIndex={0}
       onKeyDown={(event) => {
@@ -944,7 +998,7 @@ export const RemoteFileTree = ({
     >
       <div
         ref={treeScrollRef}
-        className={`min-h-0 flex-1 select-none overflow-auto pt-1 pb-8 pl-4 pr-1 ${
+        className={`relative min-h-0 flex-1 select-none overflow-auto pt-1 pb-8 pl-4 pr-1 ${
           dragTarget?.kind === "root" ? "ring-1 ring-inset ring-[#55a7e0]" : ""
         }`}
         onDragOver={(event) => handleDragOver(event, { kind: "root" })}
@@ -954,8 +1008,7 @@ export const RemoteFileTree = ({
         onDrop={(event) => void handleDrop(event, { kind: "root" })}
         onMouseDown={startMarqueeSelection}
         onClick={(event) => {
-          if (justMarqueeSelectedRef.current) {
-            justMarqueeSelectedRef.current = false;
+          if (consumeJustMarqueeSelected()) {
             return;
           }
           if (!(event.target as HTMLElement).closest("[data-tree-path],[data-tree-spacer]")) {
@@ -971,19 +1024,19 @@ export const RemoteFileTree = ({
       >
         <div className="relative w-max min-w-full" style={{ width: "max-content", minWidth: "100%" }}>
           {renderNode(root, 0)}
-          {marqueeRange && (
-            <div
-              aria-hidden
-              className="pointer-events-none absolute z-10 border border-[#55a7e0] bg-[#55a7e0]/12"
-              style={{
-                left: 0,
-                right: 0,
-                top: `${marqueeRange.top - 4}px`,
-                height: `${Math.max(1, marqueeRange.bottom - marqueeRange.top)}px`,
-              }}
-            />
-          )}
         </div>
+        {marqueeRect && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute z-10 border border-[#55a7e0] bg-[#55a7e0]/12"
+            style={{
+              left: `${marqueeRect.left}px`,
+              top: `${marqueeRect.top}px`,
+              width: `${marqueeRect.width}px`,
+              height: `${marqueeRect.height}px`,
+            }}
+          />
+        )}
       </div>
       <input
 		ref={uploadInputRef}
